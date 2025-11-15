@@ -20,7 +20,7 @@ worker.js是项目的入口js文件，其中包含index.html内容和反代I站�
 >
 > 注意：最好将我的简单反向项目index.js文件中的“res.setHeader('Access-Control-Allow-Origin','*');”替换成
 >
-> "res.setHeader('Access-Control-Allow-Origin','index2.html文件的访问源');"。这样可以访问部署的反代API接口被滥用！！！
+> "res.setHeader('Access-Control-Allow-Origin','index.html文件的访问源');"。这样可以访问部署的反代API接口被滥用！！！
 
 方法三（有学习门槛）：如果您想将该服务部署到自己的服务器（非中国大陆地区），那么您需要在服务器端使用Nginx/Apache/Caddy等Web服务器实现类似worker.js里面对Iwara的反向代理。将index.html里面跟反代Iwara相关的接口替换成你实现的接口。然后为index.html创建虚拟主机提供Web访问服务。
 
@@ -43,4 +43,5 @@ https://ss.ixq.pp.ua
 [Cloudflare](https://www.cloudflare.com/)
 
 [SweetAlert](https://sweetalert.js.org/)
+
 

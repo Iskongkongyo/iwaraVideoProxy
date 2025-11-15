@@ -381,35 +381,37 @@
     </div>
 
     <!-- 收藏列表隐藏容器（用于 SweetAlert 内容） -->
-    <div id="saveVideos" style="display:none">
-        <table id="data-table">
-            <thead>
-                <tr>
-                    <th>视频名称</th>
-                    <th>操作</th>
-                </tr>
-            </thead>
-            <tbody></tbody>
-        </table>
+    <template id="saveVideosTemplate">
+        <div class="saveVideos">
+            <table id="data-table">
+                <thead>
+                    <tr>
+                        <th>视频名称</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
 
-        <!-- 分页控件 - 放在表格下面 -->
-        <div id="paginationControls" style="margin: 15px 0; text-align: center; display: none;">
-            <div style="margin-bottom: 10px;">
-                <label>每页显示：</label>
-                <select id="pageSizeSelect">
-                    <option value="5">5条</option>
-                    <option value="10">10条</option>
-                </select>
-            </div>
-            <div>
-                <button id="firstPage" class="page-btn">首页</button>
-                <button id="prevPage" class="page-btn">上一页</button>
-                <span id="pageInfo" style="margin: 0 10px;">第 1 页 / 共 1 页</span>
-                <button id="nextPage" class="page-btn">下一页</button>
-                <button id="lastPage" class="page-btn">末页</button>
+            <div id="paginationControls" style="margin:15px 0; text-align:center; display:none;">
+                <div style="margin-bottom:10px;">
+                    <label>每页显示：</label>
+                    <select id="pageSizeSelect">
+                        <option value="5">5条</option>
+                        <option value="10">10条</option>
+                    </select>
+                </div>
+                <div>
+                    <button id="firstPage" class="page-btn">首页</button>
+                    <button id="prevPage" class="page-btn">上一页</button>
+                    <span id="pageInfo" style="margin: 0 10px;">第 1 页 / 共 1 页</span>
+                    <button id="nextPage" class="page-btn">下一页</button>
+                    <button id="lastPage" class="page-btn">末页</button>
+                </div>
             </div>
         </div>
-    </div>
+    </template>
+
 
 
 
@@ -457,7 +459,6 @@
             const btnOpenSave = document.getElementById('save');
             const btnShare = document.getElementById('share');
             const saveContainer = document.getElementById('saveVideos');
-            const saveTableBody = saveContainer.querySelector('tbody');
 
             let currentPlayId = '',
                 currentVideoName = '';
@@ -711,28 +712,26 @@
                 });
             }
 
-            // 打开收藏列表（带分页功能）
+            // 打开收藏列表（使用 template 克隆，不再移除原 DOM）
             function openFavorites() {
                 const data = JSON.parse(localStorage.getItem('save') || '{}');
 
-                // 分页相关变量
+                // 克隆模板内容
+                const template = document.getElementById('saveVideosTemplate');
+                const saveContainer = template.content.firstElementChild.cloneNode(true);
+
+                const saveTableBody = saveContainer.querySelector('tbody');
+                const pageSizeSelect = saveContainer.querySelector('#pageSizeSelect');
+                const firstPageBtn = saveContainer.querySelector('#firstPage');
+                const prevPageBtn = saveContainer.querySelector('#prevPage');
+                const nextPageBtn = saveContainer.querySelector('#nextPage');
+                const lastPageBtn = saveContainer.querySelector('#lastPage');
+                const pageInfo = saveContainer.querySelector('#pageInfo');
+                const paginationControls = saveContainer.querySelector('#paginationControls');
+
                 let currentPage = 1;
                 let pageSize = 5;
                 let totalPages = 1;
-
-                // 获取分页控件元素
-                const pageSizeSelect = document.getElementById('pageSizeSelect');
-                const firstPageBtn = document.getElementById('firstPage');
-                const prevPageBtn = document.getElementById('prevPage');
-                const nextPageBtn = document.getElementById('nextPage');
-                const lastPageBtn = document.getElementById('lastPage');
-                const pageInfo = document.getElementById('pageInfo');
-                const paginationControls = document.getElementById('paginationControls');
-
-                // 清空表格
-                saveTableBody.innerHTML = '';
-                saveContainer.style.display = 'block';
-                pageSizeSelect.options[0].selected = true;
 
                 // 计算总页数
                 function calculateTotalPages() {
@@ -741,22 +740,23 @@
                     if (totalPages === 0) totalPages = 1;
                 }
 
-                // 渲染当前页的数据
+                // 渲染当前页
                 function renderCurrentPage() {
                     saveTableBody.innerHTML = '';
 
                     const dataArray = Object.entries(data);
                     const startIndex = (currentPage - 1) * pageSize;
                     const endIndex = Math.min(startIndex + pageSize, dataArray.length);
-                    const currentPageData = dataArray.slice(startIndex, endIndex);
+                    const cur = dataArray.slice(startIndex, endIndex);
 
-                    // 构建表格行
-                    currentPageData.forEach(([id, name]) => {
-                        const row = document.createElement('tr');
-                        const tdName = document.createElement('td');
-                        tdName.textContent = name;
-                        tdName.dataset.id = id;
-                        const tdOp = document.createElement('td');
+                    cur.forEach(([id, name]) => {
+                        const tr = document.createElement('tr');
+
+                        const td1 = document.createElement('td');
+                        td1.textContent = name;
+                        td1.dataset.id = id;
+
+                        const td2 = document.createElement('td');
 
                         const btnPlay = document.createElement('button');
                         btnPlay.textContent = '播放';
@@ -766,49 +766,48 @@
                         btnDel.textContent = '删除';
                         btnDel.style.cssText = "margin-left:6px;width:40%;height:100%;background:#FF4665;color:#fff;border:none;border-radius:5px;";
 
-                        tdOp.appendChild(btnPlay);
-                        tdOp.appendChild(btnDel);
-                        row.appendChild(tdName);
-                        row.appendChild(tdOp);
-                        saveTableBody.appendChild(row);
+                        td2.appendChild(btnPlay);
+                        td2.appendChild(btnDel);
 
-                        // 按钮事件
-                        btnPlay.addEventListener('click', () => {
+                        tr.appendChild(td1);
+                        tr.appendChild(td2);
+                        saveTableBody.appendChild(tr);
+
+                        // 点击播放
+                        btnPlay.onclick = () => {
                             inputVideo.value = id;
                             swal.close();
                             playVideoById();
-                        });
+                        };
 
-                        btnDel.addEventListener('click', () => {
-                            if (confirm('确认要删除 ' + name + ' 吗？')) {
+                        // 点击删除
+                        btnDel.onclick = () => {
+                            if (confirm('确认删除 ' + name + ' 吗？')) {
                                 delete data[id];
                                 localStorage.setItem('save', JSON.stringify(data));
                                 calculateTotalPages();
-                                // 如果当前页没有数据了，回到上一页
-                                if (currentPage > totalPages) {
-                                    currentPage = totalPages;
-                                }
+                                if (currentPage > totalPages) currentPage = totalPages;
                                 renderCurrentPage();
-                                updatePaginationControls();
+                                updateControls();
                             }
-                        });
+                        };
                     });
 
-                    // 如果没有数据，显示提示
-                    if (currentPageData.length === 0) {
-                        const row = document.createElement('tr');
+                    // 空提示
+                    if (cur.length === 0) {
+                        const tr = document.createElement('tr');
                         const td = document.createElement('td');
                         td.colSpan = 2;
                         td.textContent = '暂无收藏视频';
                         td.style.textAlign = 'center';
                         td.style.color = '#999';
-                        row.appendChild(td);
-                        saveTableBody.appendChild(row);
+                        tr.appendChild(td);
+                        saveTableBody.appendChild(tr);
                     }
                 }
 
-                // 更新分页控件状态
-                function updatePaginationControls() {
+                // 更新分页控件
+                function updateControls() {
                     pageInfo.textContent = '第 ' + currentPage + ' 页 / 共 ' + totalPages + ' 页';
 
                     firstPageBtn.disabled = currentPage === 1;
@@ -816,66 +815,60 @@
                     nextPageBtn.disabled = currentPage === totalPages;
                     lastPageBtn.disabled = currentPage === totalPages;
 
-                    // 显示或隐藏分页控件（多于一页时显示）
                     paginationControls.style.display = totalPages > 1 ? 'block' : 'none';
                 }
 
-                // 分页按钮事件
+                // 分页按钮
                 firstPageBtn.onclick = () => {
                     currentPage = 1;
                     renderCurrentPage();
-                    updatePaginationControls();
+                    updateControls();
                 };
 
                 prevPageBtn.onclick = () => {
-                    if (currentPage > 1) {
-                        currentPage--;
-                        renderCurrentPage();
-                        updatePaginationControls();
-                    }
+                    if (currentPage > 1) currentPage--;
+                    renderCurrentPage();
+                    updateControls();
                 };
 
                 nextPageBtn.onclick = () => {
-                    if (currentPage < totalPages) {
-                        currentPage++;
-                        renderCurrentPage();
-                        updatePaginationControls();
-                    }
+                    if (currentPage < totalPages) currentPage++;
+                    renderCurrentPage();
+                    updateControls();
                 };
 
                 lastPageBtn.onclick = () => {
                     currentPage = totalPages;
                     renderCurrentPage();
-                    updatePaginationControls();
+                    updateControls();
                 };
 
-                // 每页显示数量改变事件
+                // 每页数量改变
                 pageSizeSelect.onchange = () => {
                     pageSize = parseInt(pageSizeSelect.value);
-                    currentPage = 1; // 重置到第一页
+                    currentPage = 1;
                     calculateTotalPages();
                     renderCurrentPage();
-                    updatePaginationControls();
+                    updateControls();
                 };
 
-                // 初始化分页
-                calculateTotalPages();
-                renderCurrentPage();
-                updatePaginationControls();
-
-                // 点击行复制链接（保持原有功能）
-                saveTableBody.addEventListener('click', event => {
-                    const tr = event.target.closest('tr');
-                    if (tr && !event.target.matches('button')) {
+                // 点击行复制链接
+                saveTableBody.addEventListener('click', e => {
+                    const tr = e.target.closest('tr');
+                    if (tr && !e.target.matches('button')) {
                         const td = tr.querySelector('td');
                         if (td && td.dataset.id) {
-                            const vid = td.dataset.id;
-                            copyLinkToClipboard('https://www.iwara.tv/video/' + vid);
+                            copyLinkToClipboard('https://www.iwara.tv/video/' + td.dataset.id);
                         }
                     }
                 });
 
-                // 显示弹窗（SweetAlert）
+                // 初始化
+                calculateTotalPages();
+                renderCurrentPage();
+                updateControls();
+
+                // SweetAlert 弹窗
                 swal({
                     title: '我的收藏',
                     content: saveContainer,
@@ -897,30 +890,27 @@
                             value: null
                         }
                     }
-                }).then(action => {
-                    if (action === 'clear') {
+                }).then(act => {
+                    if (act === 'clear') {
                         swal({
-                            title: '温馨提示',
-                            text: '清空收藏操作不可逆，是否确认？',
+                            title: '提示',
+                            text: '清空收藏不可恢复，是否确认？',
                             icon: 'warning',
-                            buttons: ['取消', '清空内容']
+                            buttons: ['取消', '清空']
                         }).then(ok => {
                             if (ok) {
                                 localStorage.removeItem('save');
-                                // 清空后重新打开收藏列表
                                 openFavorites();
                             }
                         });
-                    } else if (action === 'export') {
+                    } else if (act === 'export') {
                         exportFavorites();
-                    } else if (action === 'import') {
-                        importFavorites().then(() => {
-                            // 导入后重新打开收藏列表
-                            openFavorites();
-                        });
+                    } else if (act === 'import') {
+                        importFavorites().then(() => openFavorites());
                     }
                 });
             }
+
 
             function safePlay(video) {
                 const p = video.play();
@@ -1090,7 +1080,7 @@
                 });
             }
 
-            // 当 overlay （iframeContainer） 显示时隐藏 footer，避免遮挡
+            // 小优化：当 overlay （iframeContainer） 显示时隐藏 footer，避免遮挡
             const iframeContainer = document.getElementById('iframeContainer');
             if (iframeContainer) {
                 const obs = new MutationObserver(() => {

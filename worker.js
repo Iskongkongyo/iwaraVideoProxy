@@ -1,767 +1,1127 @@
-const html = `<!DOCTYPE HTML>
-   <html>
-     <head>
-       <meta charset="utf-8" />
-       <meta name="viewport" content="width=device-width, initial-scale=1" />
-       <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
-       <title>在线Iwara视频播放网站</title>
-       <meta name="description" content="一款免费在线Iwara视频播放网站" />
-       <meta name="keyword" content="免费、在线视频、Iwara、视频" />
-       <link rel="icon" href="https://files.catbox.moe/n8mogj.png"/>
-       <script src="https://unpkg.com/sweetalert/dist/sweetalert.min.js"></script>
-       <style type="text/css">
-         * {
-           margin: 0;
-           padding: 0;
-         }
-   
-         html,
-         body,
-         input{
-           outline: none;
-           font-family: 'Arial', 'Microsoft YaHei', '黑体', '宋体', sans-serif;
-           font-size: 12px;
-         }
-   
-         html,
-         body {
-           background: #fff;
-           padding-bottom: 60px;
-         }
-   
-         #iframeContainer {
-           display: none; 
-           justify-content: center;
-           align-items: center;
-           position: fixed;
-           top: 0;
-           left: 0;
-           width: 100%;
-           height: 100%;
-           background-color: rgba(0, 0, 0, 1); 
-           z-index: 1000; 
-         }
-   
-         #myVideo {
-           width: 80%; 
-           height: 80%; 
-           border: none; 
-         }
-   
-         a {
-           text-decoration: none;
-         }
-   
-         a:hover {
-           text-decoration: underline;
-         }
-   
-         .wrap {
-           text-align: center;
-           overflow: hidden;
-         }
-   
-         .wrap .meta {
-           margin: 160px 0 0 0;
-           opacity: 0;
-           transform: translateY(-150px);
-           transition: .5s all ease;
-         }
-   
-         .on .wrap .meta {
-           opacity: 1;
-           transform: translateY(0);
-         }
-   
-         .wrap .meta .title {
-           line-height: 1em;
-           color: #ff4665;
-           font-size: 42px;
-           text-transform: uppercase;
-         }
-   
-         .wrap .meta .description {
-           margin: 10px 0 0 0;
-           line-height: 1em;
-           color: #7e7e7e;
-           font-size: 16px;
-           font-weight: normal;
-         }
-   
-         .wrap .link-area {
-           margin: 50px 0 0 0;
-           opacity: 0;
-           transition: .5s opacity ease;
-         }
-   
-         .on .wrap .link-area {
-           opacity: 1;
-         }
-   
-         .wrap .link-area input {
-           display: inline-block;
-           vertical-align: middle;
-         }
-   
-         .wrap .link-area .form {
-           width: 220px;
-           height: 32px;
-           line-height: 32px;
-           padding: 0 10px;
-           border: 3px solid #bdc3c7;
-           border-radius: 5px;
-           color: #333;
-         }
-   
-         .wrap .link-area .form.focus,
-         .wrap .link-area .form:focus,select.focus,select:focus {
-           border-color: #ff4665;
-           transition: .2s border ease;
-         }
-   
-         .wrap .link-area #submit {
-           width: 90px;
-           height: 38px;
-           margin: 0 0 0 10px;
-           background: #ff4665;
-           border-radius: 5px;
-           color: #fff;
-           border: none;
-           cursor: pointer;
-           transition: .2s opacity ease;
-         }
+const html = `
+<!DOCTYPE html>
+<html lang="zh-CN">
 
-         .wrap .link-area #hot {
-          width: 90px;
-          height: 38px;
-          margin: 0 0 0 10px;
-          background: #3AB54A;
-          border-radius: 5px;
-          color: #fff;
-          border: none;
-          cursor: pointer;
-          transition: .2s opacity ease;
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>在线 Iwara 视频播放网站</title>
+    <meta name="description" content="一款免费在线 Iwara 视频播放网站" />
+    <meta name="keywords" content="免费视频 在线 视频 Iwara" />
+    <link rel="icon" href="https://files.catbox.moe/n8mogj.png" />
+    <script src="https://unpkg.com/sweetalert/dist/sweetalert.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
-        .wrap .link-area #save {
-          width: 90px;
-          height: 38px;
-          margin: 0 0 0 10px;
-          background: #CCCC00;
-          border-radius: 5px;
-          color: #fff;
-          border: none;
-          cursor: pointer;
-          transition: .2s opacity ease;
+        html,
+        body,
+        input {
+            outline: none;
+            font-family: Arial, "Microsoft YaHei", sans-serif;
+            font-size: 12px;
         }
-        
-        .wrap .link-area #share {
-          width: 90px;
-          height: 38px;
-          margin: 0 0 0 10px;
-          background: #33ccff;
-          border-radius: 5px;
-          color: #fff;
-          border: none;
-          cursor: pointer;
-          transition: .2s opacity ease;
-        }
-   
-         .wrap .link-area #submit:hover {
-           opacity: .75;
-         }
-   
-         .wrap .link-area #submit:active {
-           opacity: .9;
-         }
 
-         .wrap .footer {
-          width:100%; 
-          bottom: 40px;  
-          left: 0;
-          position: fixed;
-          color: #7e7e7e;
-          padding: 10px;
-          text-align: center;  
+        body {
+            background: #fff;
+            padding-bottom: 60px;
         }
-  
-        .wrap .footer a {
-          color: #ff4665;
+
+        #iframeContainer {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 1);
+            z-index: 1000;
+        }
+
+        #myVideo {
+            width: 80%;
+            height: 80%;
+            border: none;
+        }
+
+        button {
+            cursor: pointer;
+        }
+
+        /* 父容器：page 用作相对定位上下文 */
+        .page {
+            position: relative;
+            min-height: 100vh;
+            /* 保证页面至少占满屏幕高度 */
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 主体占据可用空间，footer 被推到底部 */
+        .wrap {
+            flex: 1 0 auto;
+        }
+
+        .wrap {
+            text-align: center;
+            overflow: hidden;
+        }
+
+        .meta {
+            margin-top: 160px;
+            opacity: 0;
+            transform: translateY(-150px);
+            transition: 0.5s ease;
+        }
+
+        .wrap.on .meta {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .title {
+            line-height: 1em;
+            color: #ff4665;
+            font-size: 42px;
+            text-transform: uppercase;
+        }
+
+        .description {
+            margin-top: 10px;
+            line-height: 1em;
+            color: #7e7e7e;
+            font-size: 16px;
+        }
+
+        .link-area {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: nowrap;
+            margin-top: 50px;
+            opacity: 0;
+            transition: 0.5s ease;
+        }
+
+        .wrap.on .link-area {
+            opacity: 1;
+        }
+
+        .link-area input.form {
+            width: 220px;
+            height: 37px;
+            line-height: 32px;
+            padding: 0 10px;
+            border: 3px solid #bdc3c7;
+            border-radius: 5px;
+            color: #333;
+        }
+
+        .link-area input.form:focus {
+            border-color: #ff4665;
+        }
+
+        .link-area select {
+            width: 85px;
+            height: 37px;
+            padding: 0 10px;
+            border: 3px solid #bdc3c7;
+            border-radius: 5px;
+            color: #333;
+        }
+
+        .link-area select:focus {
+            border-color: #ff4665;
+        }
+
+        .link-area .btn {
+            width: 90px;
+            height: 38px;
+            margin-left: 10px;
+            border: none;
+            border-radius: 5px;
+            color: #fff;
+            transition: 0.2s ease;
+        }
+
+        .link-area .btn:hover {
+            opacity: 0.75;
+        }
+
+        .btn-play {
+            background: #ff4665;
+        }
+
+        .btn-hot {
+            background: #3AB54A;
+        }
+
+        .btn-save {
+            background: #CCCC00;
+        }
+
+        .btn-share {
+            background: #33CCFF;
+        }
+
+        @media (max-width: 768px) {
+            .link-area {
+                flex-direction: column;
+                /* 按列排列 */
+                align-items: center;
+                gap: 10px;
+            }
+
+            /* 输入框 + 选择框在一行 */
+            .input-row {
+                display: flex;
+                width: 80%;
+                justify-content: center;
+                gap: 10px;
+            }
+
+            .input-row input,
+            .input-row select {
+                width: 40%;
+                /* 两个控件并列占满 */
+            }
+
+            .link-area .btn {
+                width: 80%;
+                height: 38px;
+                margin-left: 10px;
+                border: none;
+                border-radius: 5px;
+                color: #fff;
+                transition: 0.2s ease;
+            }
+
+            /* 其他按钮每个独占一行 */
+            .link-area button {
+                width: 100%;
+            }
+        }
+
+        /* 收藏列表分页样式 */
+        #paginationControls {
+            margin: 15px 0;
+            text-align: center;
+            display: none;
+        }
+
+        #paginationControls>div:first-child {
+            margin-bottom: 10px;
+        }
+
+        #paginationControls>div:last-child {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: nowrap;
+            gap: 5px;
+            overflow-x: auto;
+            padding: 5px 0;
+        }
+
+        .page-btn {
+            padding: 5px 10px;
+            margin: 0 2px;
+            background: #ff4665;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            white-space: nowrap;
+            /* 防止文字换行 */
+            flex-shrink: 0;
+            /* 防止按钮缩小 */
+        }
+
+        #pageInfo {
+            margin: 0 10px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        #pageSizeSelect {
+            padding: 3px 5px;
+            border: 1px solid #bdc3c7;
+            border-radius: 3px;
+        }
+
+        .page-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .page-btn:hover:not(:disabled) {
+            opacity: 0.8;
+        }
+
+        /* 移动端适配 */
+        @media (max-width: 768px) {
+            #paginationControls>div:last-child {
+                gap: 3px;
+                padding: 5px;
+            }
+
+            .page-btn {
+                padding: 5px 8px;
+                font-size: 12px;
+            }
+
+            #pageInfo {
+                font-size: 12px;
+                margin: 0 5px;
+            }
+        }
+
+        /* footer 改为 absolute，在底部定位（JS 会动态调整 bottom） */
+        .footer {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            /* 默认底部为 0，JS 在键盘弹出时会修改 */
+            padding: 12px 10px;
+            color: #7e7e7e;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.95);
+            /* 可选：半透明背景，避免内容被遮挡时难看 */
+            box-shadow: 0 -4px 12px rgba(0, 0, 0, 0);
+            z-index: 999;
+            /* safe-area 支持 */
+            padding-bottom: calc(env(safe-area-inset-bottom, 0) + 12px);
+        }
+
+        .footer a {
+            color: #ff4665;
+            text-decoration: none;
         }
 
         table {
-          width: 100%;
-          border-collapse: collapse;
-          box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-          table-layout: fixed;
-      }
-
-      th:first-child, td:first-child {
-        width: 65%;
-        word-wrap: break-word;
-    }
-      
-      th, td {
-          padding: 15px;
-          text-align: left; 
-          border: 1px solid #ccc;
-      }
-      
-      th {
-          background-color: #f2f2f2;
-      }
-      
-      tr:hover {
-          background-color: #f1f1f1;
-      }
-
-        select{
-           width: 85px;
-           height: 37px;
-           line-height: 37px;
-           padding: 0 10px;
-           border: 3px solid #bdc3c7;
-           border-radius: 5px;
-           color: #333;
+            width: 100%;
+            border-collapse: collapse;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            table-layout: fixed;
         }
-       </style>
-     </head>
-   
-     <body>
-       <div id="iframeContainer">
-         <!-- 使用 video 元素来加载视频 -->
-         <button id="saveButton" style="position: absolute; top: 10px; right: 120px; z-index: 1001; background-color: #CCCC00; color: white; border: none; padding: 5px 10px; cursor: pointer;">收藏</button>
-         <button id="downButton" style="position: absolute; top: 10px; right: 65px; z-index: 1001; background-color: #87ceeb; color: white; border: none; padding: 5px 10px; cursor: pointer;">下载</button>
-         <button id="closeButton" style="position: absolute; top: 10px; right: 10px; z-index: 1001; background-color: red; color: white; border: none; padding: 5px 10px; cursor: pointer;">关闭</button>
-         <video id="myVideo" controls autoplay>
-           <source class="videoSource" src="" type="video/mp4" />
-           <source class="videoSource" src="" type="video/webm">
-           <source class="videoSource" src="" type="video/ogg">
-           您的浏览器不支持视频播放。
-         </video>
-       </div>
 
-       <div id="saveVideos" style="display:none">
-       <table id="data-table">
-        <thead>
-            <tr>
-                <th>视频名称</th>
-                <th>操作</th>
-            </tr>
-        </thead>
-        <tbody>
-        </tbody>
-       </table>
-       </div>
-   
-       <div class="wrap">
-         <div class="meta">
-           <h2 class="title">在线Iwara视频播放网站</h2>
-           <h3 class="description">一款免费在线Iwara视频播放网站</h3>
-         </div>
-         <div class="link-area">
-           <input id="video" class="form" type="text" placeholder="填写视频ID或粘贴视频链接！" />
-           <select>
-           <option value="Source">原视频</option>
-           <option value="360">360P</option>
-           <option value="540" selected>540P</option>
-           </select>
-           <input id="submit" type="button" value="播放视频" />
-           <input id="hot" type="button" value="随机热门" />
-           <input id="save" type="button" value="打开收藏" />
-           <input id="share" type="button" value="分享视频" />
-         </div>
-         <div class="footer">
-           Copyright &copy; 权限- All Rights Reserved
-           <p>
-             <a href="/" target="_self" style="text-decoration:none;">跳转链接</a>
-           </p>
-         </div>
-       </div>
-   
-       <script type="text/javascript">
-       let videoPlayUrl,videoName,videoQuality,idValue,playId;
-       // 获取id参数值
-        idValue = (new URLSearchParams(location.search)).get('id');
-        // 获取视频质量, 默认540p
-        videoQuality = (new URLSearchParams(location.search)).get('quality') || '540';
-
-        // 获取关闭按钮和 iframeContainer
-        const iframeContainer = document.querySelector('#iframeContainer');
-        const videoElement = document.querySelector('#myVideo');
-
-        let listener1 = setInterval(()=>{videoElement.pause();},300);
-
-        swal({
-            title:'温馨提示',
-            text:'本网站免费提供I站(Iwara)视频播放和下载服务！使用前请遵守当地法律法规！如果您能访问I站，强烈建议到I站官网观看更多精彩视频！是否跳转I站官网？',
-            buttons:{
-              cancel: {
-                text: "暂不跳转",
-                value: false,
-                visible: true
-              },
-              confirm: {
-                text: "跳转I站",
-                value: true,
-                visible: true
-              }
-            }
-          }).then((value) => {
-             clearInterval(listener1);
-              if (value) {
-                  let shareId = (new URL(location.href)).searchParams.get('id');
-                  shareId ? location.replace('https://www.iwara.tv/video/'+shareId) : location.replace('https://www.iwara.tv');
-              }else{
-              videoElement.play();
-            }
-            });
-
-       document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(function() {
-          var el = document.getElementsByTagName('html')[0];
-          el.className = 'on';
-        }, 100);
-      
-        if (idValue) {
-          document.querySelector('#video').value = idValue;
-          document.querySelector('select').value = videoQuality;
-          skip();
+        th,
+        td {
+            padding: 15px;
+            text-align: left;
+            border: 1px solid #ccc;
         }
-      });
-      
-      // 回车监听事件
-      document.addEventListener('keypress', (event) => {
-        if (event.key === 'Enter') {
-          skip();
+
+        th {
+            background-color: #f2f2f2;
         }
-      });
-      
-      document.querySelector('#submit').addEventListener('click', skip);
 
-      document.querySelector('#hot').addEventListener('click', getHots);
-
-      document.querySelector('#share').addEventListener('click', ()=>{copyLinkToClipboard(null)});
-
-      document.querySelector('#save').addEventListener('click', ()=>{getSaveVideos(JSON.parse(localStorage.getItem('save')));});
-
-      document.querySelector('#video').addEventListener('input', () => {
-        let videoUrl = document.querySelector('#video').value;
-        if (videoUrl.startsWith('https://www.iwara.tv/video/')) {
-            let newVideoId = videoUrl.replace('https://www.iwara.tv/video/', '').split('/')[0];
-            setTimeout(() => {
-                document.querySelector('#video').value = newVideoId;
-            }, 200);
+        tr:hover {
+            background-color: #f1f1f1;
         }
-    });
 
-      
-      // 为关闭按钮添加事件监听
-      document.querySelector('#closeButton').addEventListener('click', () => {
-        videoElement.pause(); // 停止播放视频
-        videoElement.currentTime = 0; // 重置播放时间
-        iframeContainer.style.display = 'none'; // 隐藏父容器
-      });
-
-      // 为下载按钮添加事件监听
-      document.querySelector('#downButton').addEventListener('click', () => {
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = videoPlayUrl;
-        link.style = 'z-index:1002';
-        link.download = videoName;
-        document.body.appendChild(link);
-        link.click();
-        swal("准备下载，请稍等!", {
-            icon: "success",
-            buttons: false,
-            timer: 1500,
-          });
-        document.body.removeChild(link);
-      });
-
-      document.querySelector('#saveButton').addEventListener('click', () => {
-        let data = localStorage.getItem('save') ? JSON.parse(localStorage.getItem('save')) : {};
-        data[playId] = videoName;
-        localStorage.setItem('save',JSON.stringify(data));
-        swal("收藏成功!", {
-            icon: "success",
-            buttons: false,
-            timer: 1500,
-          });
-      });
-
-      //判断两个时间戳之差是否超过一天
-      function isMoreThanOneDay(timestamp2) {
-        const date1 = new Date();
-        const date2 = new Date(timestamp2);
-        return Math.abs(date1 - date2) > 1000 * 60 * 60 * 24;
-      }
-
-      // 复制文本到剪切板
-			async function copyLinkToClipboard(value) {
-				try { 
-          if(value){
-            await navigator.clipboard.writeText(value);
-          }else{
-            let url = new URL(location.origin);
-            url.searchParams.set('id',document.querySelector('#video').value || 'Hvfo6PVnB9mnsD');
-            url.searchParams.set('quality',document.querySelector('select').value || '540');       
-            await navigator.clipboard.writeText(url.href);
-          } 
-          swal("链接已复制到剪切板！快去分享吧！", {
-            icon: "success",
-            buttons: false,
-            timer: 2000,
-          });
-				} catch (err) {
-          swal({
-              text: '复制失败，失败原因：'+err,
-              icon:'error',
-              button:'关闭'
-            });
-				}
-			}
-
-      //获取从a到b的随机数
-      function getRandomInt(a, b) {
-        return Math.floor(Math.random() * (b - a + 1)) + a;
-      }
-
-      //SHA-1进行Hash
-      async function hashStringSHA1(input) {
-        // 使用TextEncoder将字符串编码为UTF-8字节序列
-        const encoder = new TextEncoder();
-        const data = encoder.encode(input);
-     
-        // 使用Web Crypto API的crypto.subtle.digest方法进行SHA-1哈希计算
-        const hashBuffer = await crypto.subtle.digest('SHA-1', data);
-     
-        // 将ArrayBuffer转换为Uint8Array，然后转换为十六进制字符串
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-     
-        return hashHex;
-    }
-
-    //获取指定清晰度视频
-    function getVideoViewUrlByQuality(objectArray, quality) {
-      for (let i = 0; i < objectArray.length; i++) {
-          const obj = objectArray[i];
-          // 检查当前对象的name属性是否与给定的quality匹配
-          if (obj.name === quality) {
-              // 如果匹配，返回该对象的src.view属性值
-              return obj.src.view;
-          }
-      }
-      // 如果没有找到匹配项，返回第一个对象的src.view属性值
-      return objectArray[0].src.view;
-  }
-
-     function getSaveVideos(data){
-      // 获取表格的tbody元素
-    const tbody = document.querySelector("#data-table tbody");
- 
-    // 清空表格内容
-    tbody.innerHTML = "";
- 
-    // 动态创建表格行
-    for (const key in data) {
-        if (data.hasOwnProperty(key)) {
-            const row = document.createElement("tr");
- 
-            // 创建value单元格
-            const valueCell = document.createElement("td");
-            valueCell.dataset.id = key;
-            valueCell.textContent = data[key];
-            row.appendChild(valueCell);
- 
-            // 创建按钮单元格
-            const buttonCell = document.createElement("td");
-            let button = document.createElement("button");
-            button.textContent = "播放";
-            button.style.cssText = "width:40%;height:100%;background: #33ccff;border-radius: 5px;color: #fff;border: none;";
-            button.addEventListener("click", (event) => {
-              event.stopPropagation();
-              document.querySelector('#video').value = key;
-              swal.close();
-              skip();
-            });
-            buttonCell.appendChild(button);
-
-            button = document.createElement("button");
-            button.textContent = "删除";
-            button.style.cssText = "margin-left:6px;width:40%;height:100%;background: #ff4665;border-radius: 5px;color: #fff;border: none;";
-            button.addEventListener("click", (event) => {
-                event.stopPropagation();
-                let isDelete = confirm('确认要删除'+data[key]+'吗？');
-                if(!isDelete) return;
-                delete data[key];
-                localStorage.setItem('save',JSON.stringify(data));
-                document.querySelector('#save').click();
-            });
-            buttonCell.appendChild(button);
-
-            row.appendChild(buttonCell);
- 
-            // 将行添加到tbody中
-            tbody.appendChild(row);
+        th:first-child,
+        td:first-child {
+            width: 65%;
+            word-wrap: break-word;
         }
-    }
-      
-    const rows = document.querySelectorAll("#data-table tbody tr");
 
-    rows.forEach(row => {
-        row.addEventListener("click", () => {
-            copyLinkToClipboard('https://www.iwara.tv/video/'+row.cells[0].dataset.id);
-        });
-    });
-
-      swal({
-        content: document.querySelector("#data-table"),
-        buttons:{
-          clear: {
-                text: "清空收藏",
-                value: true
-            },
-          close: {
-                text: "关闭",
-                value: false
-          }
+        #saveButton {
+            position: absolute;
+            top: 10px;
+            right: 120px;
+            z-index: 1001;
+            background: #CCCC00;
+            color: #fff;
+            border: none;
+            padding: 5px 10px;
         }
-      }).then((value)=>{
-         if(value){
-          swal({
-            title:'温馨提示',
-            text:'清空收藏操作不可逆，是否清空收藏内容？',
-            icon:'info',
-            buttons:['取消','清空内容']
-            }).then((value)=>{
-            value ? localStorage.removeItem('save') : swal.close();
-           })
-         }else{
-           swal.close();
-         }
-      });
 
-      document.querySelector("#saveVideos").innerHTML = '<table id="data-table"><thead><tr><th>视频名称</th><th>操作</th></tr></thead><tbody></tbody></table>';
+        #downButton {
+            position: absolute;
+            top: 10px;
+            right: 65px;
+            z-index: 1001;
+            background: #87CEEB;
+            color: #fff;
+            border: none;
+            padding: 5px 10px;
+        }
 
-     }
+        #closeButton {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1001;
+            background: #FF0000;
+            color: #fff;
+            border: none;
+            padding: 5px 10px;
+        }
+    </style>
+</head>
 
-      //获取热门视频信息
-      function getHots() {
+<body>
+    <!-- 视频播放容器（初始隐藏） -->
+    <div id="iframeContainer">
+        <button id="saveButton">收藏</button>
+        <button id="downButton">下载</button>
+        <button id="closeButton">关闭</button>
+        <video id="myVideo" controls autoplay>
+            <source class="videoSource" src="" type="video/mp4" />
+            <source class="videoSource" src="" type="video/webm">
+            <source class="videoSource" src="" type="video/ogg">
+            您的浏览器不支持视频播放。
+        </video>
+    </div>
 
-        let info,ts,type;
+    <!-- 收藏列表隐藏容器（用于 SweetAlert 内容） -->
+    <template id="saveVideosTemplate">
+        <div class="saveVideos">
+            <table id="data-table">
+                <thead>
+                    <tr>
+                        <th>视频名称</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
 
-        swal({
-            text: '随机热门视频分为普通和R18内容，您要随机播放哪种内容？',
-            icon:'info',
-            buttons:{
-                cancel: {
-                  text: "关闭",
-                  value: false,
-                  visible: true
-                },
-                r18: {
-                  text: "R18",
-                  value: 'R18',
-                  visible: true
-                },
-                general:{
-                  text:"普通",
-                  value:'General',
-                  visible:true
+            <div id="paginationControls" style="margin:15px 0; text-align:center; display:none;">
+                <div style="margin-bottom:10px;">
+                    <label>每页显示：</label>
+                    <select id="pageSizeSelect">
+                        <option value="5">5条</option>
+                        <option value="10">10条</option>
+                    </select>
+                </div>
+                <div>
+                    <button id="firstPage" class="page-btn">首页</button>
+                    <button id="prevPage" class="page-btn">上一页</button>
+                    <span id="pageInfo" style="margin: 0 10px;">第 1 页 / 共 1 页</span>
+                    <button id="nextPage" class="page-btn">下一页</button>
+                    <button id="lastPage" class="page-btn">末页</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
+
+
+
+    <!-- 新包装：page 容器，作为相对定位父容器 -->
+    <div class="page">
+        <div class="wrap">
+            <div class="meta">
+                <h2 class="title">在线 Iwara 视频播放网站</h2>
+                <h3 class="description">一款免费在线 Iwara 视频播放网站</h3>
+            </div>
+            <div class="link-area">
+                <div class="input-row">
+                    <input id="video" class="form" type="text" placeholder="填写视频ID或粘贴视频链接" />
+                    <select id="quality">
+                        <option value="Source">原视频</option>
+                        <option value="360">360P</option>
+                        <option value="540" selected>540P</option>
+                    </select>
+                </div>
+                <button id="submit" class="btn btn-play">播放视频</button>
+                <button id="hot" class="btn btn-hot">随机热门</button>
+                <button id="save" class="btn btn-save">打开收藏</button>
+                <button id="share" class="btn btn-share">分享视频</button>
+            </div>
+            <div class="footer">
+                Copyright &copy; 在线 Iwara 视频播放网站 All Rights Reserved
+                <p><a href="/" target="_self">跳转链接</a></p>
+            </div>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+        (() => {
+            // 缓存常用元素
+            const iframeContainer = document.getElementById('iframeContainer');
+            const videoElement = document.getElementById('myVideo');
+            //const srcElements      = document.getElementsByClassName('videoSource');
+            const btnSaveOverlay = document.getElementById('saveButton');
+            const btnDownload = document.getElementById('downButton');
+            const btnCloseOverlay = document.getElementById('closeButton');
+            const inputVideo = document.getElementById('video');
+            const selectQuality = document.getElementById('quality');
+            const btnSubmit = document.getElementById('submit');
+            const btnHot = document.getElementById('hot');
+            const btnOpenSave = document.getElementById('save');
+            const btnShare = document.getElementById('share');
+            const saveContainer = document.getElementById('saveVideos');
+
+            let currentPlayId = '',
+                currentVideoName = '';
+
+            // 弹窗提示用户遵守法规
+            swal({
+                title: '温馨提示',
+                text: '本网站免费提供 I站 (Iwara) 视频播放和下载服务！请遵守当地法律法规。若您能访问 I站，请到官网观看更多精彩内容！是否跳转 I站官网？',
+                buttons: {
+                    cancel: {
+                        text: "暂不跳转",
+                        value: false,
+                        visible: true
+                    },
+                    confirm: {
+                        text: "跳转 I站",
+                        value: true
+                    }
                 }
-              }
-          }).then((value)=>{
-                if(value === 'R18'){
-                    [info,ts,type] = ['hots','ts','ecchi'];
-                }else if(value === 'General'){
-                   [info,ts,type] = ['generalHots','generalTs','general'];
-                }else{
-                  return swal.close();
+            }).then(goToIwara => {
+                videoElement.pause();
+                if (goToIwara) {
+                    const shareId = new URL(location.href).searchParams.get('id');
+                    location.replace(shareId ? 'https://www.iwara.tv/video/' + shareId : 'https://www.iwara.tv');
+                } else {
+                    safePlay(videoElement);
                 }
+            });
 
-                if(localStorage.getItem(info) && !isMoreThanOneDay(parseInt(localStorage.getItem(ts)))){
-                  const results = JSON.parse(localStorage.getItem(info));
-                  document.querySelector('#video').value = results[getRandomInt(0,results.length)]['id'];
-                  skip();
-                }else{
-                    fetch('/view?url='+encodeURIComponent('https://api.iwara.tv/videos?rating='+type+'&sort=trending&limit=24'))
-                  .then(response => {
-                    if(!response.ok){
+            // 页面载入后激活动画效果，若 URL 带有 id 参数则自动播放
+            document.addEventListener('DOMContentLoaded', () => {
+                setTimeout(() => document.querySelector('.wrap').classList.add('on'), 100);
+                const idParam = new URLSearchParams(location.search).get('id');
+                const qualityParam = new URLSearchParams(location.search).get('quality');
+                if (idParam) {
+                    inputVideo.value = idParam;
+                    selectQuality.value = qualityParam || selectQuality.value;
+                    playVideoById();
+                }
+            });
+
+            // 回车监听
+            document.addEventListener('keypress', event => {
+                if (event.key === 'Enter') playVideoById();
+            });
+
+            // 绑定按钮事件
+            btnSubmit.addEventListener('click', playVideoById);
+            btnHot.addEventListener('click', showRandomHotPrompt);
+            btnOpenSave.addEventListener('click', () => openFavorites());
+            btnShare.addEventListener('click', () => copyLinkToClipboard());
+            btnCloseOverlay.addEventListener('click', () => {
+                videoElement.pause();
+                videoElement.currentTime = 0;
+                iframeContainer.style.display = 'none';
+            });
+
+            // 输入框 URL 转 ID 解析
+            inputVideo.addEventListener('input', () => {
+                const url = inputVideo.value;
+                if (url.startsWith('https://www.iwara.tv/video/')) {
+                    const newId = url.replace('https://www.iwara.tv/video/', '').split('/')[0];
+                    setTimeout(() => {
+                        inputVideo.value = newId;
+                    }, 200);
+                }
+            });
+
+            // 收藏按钮（覆盖当前视频）
+            btnSaveOverlay.addEventListener('click', () => {
+                let data = JSON.parse(localStorage.getItem('save') || '{}');
+                data[currentPlayId] = currentVideoName;
+                localStorage.setItem('save', JSON.stringify(data));
+                swal("收藏成功！", {
+                    icon: "success",
+                    buttons: false,
+                    timer: 1500
+                });
+            });
+
+            // 下载当前视频
+            btnDownload.addEventListener('click', () => {
+                const a = document.createElement('a');
+                a.href = videoElement.querySelector('source').src;
+                a.download = currentVideoName || 'video.mp4';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            });
+
+            // 播放视频逻辑
+            async function playVideoById() {
+                const id = inputVideo.value.trim() || 'Hvfo6PVnB9mnsD';
+                const validId = /^[0-9a-zA-Z]{9,}$/;
+                if (!id) {
+                    inputVideo.value = '';
+                    return;
+                }
+                if (!validId.test(id)) {
                     swal({
-                        text: '热门视频信息获取失败，请再次尝试获取！',
-                        icon:'error',
-                        button:'关闭'
-                      })
-                  }else{
-                     return response.json();
-                  }
-                }).then(data=>{
-                    const results = data.results;
-                    localStorage.setItem(info,JSON.stringify(results));
-                    localStorage.setItem(ts,(new Date()).getTime());
-                    document.querySelector('#video').value = results[getRandomInt(0,results.length)]['id'];
-                    skip();
-                  }).catch(err=>{
+                        text: '视频 ID 格式不正确！',
+                        icon: 'error',
+                        button: '关闭'
+                    });
+                    inputVideo.value = '';
+                    return;
+                }
+                const quality = selectQuality.value;
+                currentPlayId = id;
+
+                // 获取视频信息
+                //某些视频需要登录才能观看,这里添加authorization请求头用于登录验证，实测下面两种token都可以。
+                //1.localStorage.getItem('token')获取的token(refresh_token)有效期时间为一个月。
+                //2.向"https://api.iwara.tv/user/token"发起POST请求，请求头要有authorization，其值为第一个token。响应包含access_token(有效期一个小时)。
+                try {
+                    const res = await fetch('/video/' + id, {
+                        headers: {
+                            authorization: ''
+                        }
+                    });
+                    if (!res.ok) {
+                        throw '获取视频信息失败';
+                    }
+                    const data = await res.json();
+                    currentVideoName = data.title + '.' + data.file.mime.replace('video/', '');
+                    // NTR 标题提示
+                    if (/NTR/i.test(data.title)) {
+                        let pauseIntv = setInterval(() => videoElement.pause(), 300);
+                        const proceed = await swal({
+                            title: '温馨提示',
+                            text: '检测到视频标题 ' + data.title + ' 中包含 NTR 关键字，是否继续播放？',
+                            buttons: {
+                                cancel: {
+                                    text: "播放",
+                                    value: false,
+                                    visible: true
+                                },
+                                confirm: {
+                                    text: "不播放",
+                                    value: true
+                                }
+                            }
+                        });
+                        clearInterval(pauseIntv);
+                        if (proceed) {
+                            btnCloseOverlay.click();
+                            return;
+                        }
+                    }
+
+                    // 计算播放链接
+                    const fileUrl = new URL(data.fileUrl);
+                    const filehash = fileUrl.searchParams.get('hash');
+                    const fileExpires = fileUrl.searchParams.get('expires');
+                    const inputString = data.file.id + '_' + fileExpires + '_5nFp9kmbNnHdAFhaqMvt';
+
+                    // 生成 SHA-1
+                    const hashBuf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(inputString));
+                    const hashArray = Array.from(new Uint8Array(hashBuf));
+                    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+                    // 获取实际播放链接
+                    const res2 = await fetch(fileUrl.pathname + '?expires=' + fileExpires + '&hash=' + filehash + '&download=' + encodeURIComponent('Iwara - ' + data.title + ' [' + data.id + '].' + data.file.mime.replace('video/', '')), {
+                        headers: {
+                            'X-Version': hashHex
+                        }
+                    });
+                    if (!res2.ok) {
+                        throw '获取播放资源失败';
+                    }
+                    const data2 = await res2.json();
+                    const videoUrl = 'https:' + getVideoUrlByQuality(data2, quality);
+                    const finalUrl = '/view?url=' + encodeURIComponent(videoUrl);
+
+                    // 播放视频
+                    videoElement.pause();
+                    videoElement.currentTime = 0;
+                    iframeContainer.style.display = 'none';
+                    iframeContainer.style.display = 'flex';
+                    const videoSource = document.querySelector('.videoSource');
+                    videoSource.src = finalUrl; // 设置 video 源链接
+                    videoElement.load(); // 加载视频
+                    safePlay(videoElement); // 播放视频
+
+                } catch (err) {
                     swal({
-                        text: '出现错误：'+err,
-                        icon:'error',
-                        button:'关闭'
-                      });
-                  })
+                        text: '出现错误：' + err,
+                        icon: 'error',
+                        button: '关闭'
+                    });
                 }
-
-
-          })
-
-      }
-
-      function skip() {
-        const id = document.querySelector('#video').value || 'Hvfo6PVnB9mnsD';
-        const patt = /^[0-9a-zA-Z]{9,}$/;
-
-        if (!id) {
-          document.querySelector('#video').value = '';
-          return;
-        }else if (!patt.test(id)) {
-          swal({
-              text: '视频ID格式不正确！',
-              icon:'error',
-              button:'关闭'
-            });
-          document.querySelector('#video').value = '';
-          return;
-        }
-
-        videoQuality = document.querySelector('select').value;
-        playId = id;
-      
-        fetch('/video/' + id)
-          .then(response =>{
-            if(!response.ok){
-              swal({
-                  text: '视频信息获取失败，请再次尝试获取！',
-                  icon:'error',
-                  button:'关闭'
-                })
-            }else{
-               return response.json();
             }
-          }).then(data => {
-            console.log(data);
-            const filename = data.file.id + '_Source.' + data.file.mime.replace('video/', '');
-            const path = encodeURIComponent(data.file.path);
-            const fileUrl = new URL(data.fileUrl);
-            const id = data.file.id;
-            const filehash = fileUrl.searchParams.get('hash');
-            const fileExpires = fileUrl.searchParams.get('expires');
-            videoName = data.title + '.' + data.file.mime.replace('video/', '');
-            const download = encodeURIComponent('Iwara - ' + data.title + ' [' + data.id + '].' + data.file.mime.replace('video/', ''));
-      
-            //标题检查
-            if(data.title.search(/(NTR)/i) != -1){
-              let listener = setInterval(()=>{videoElement.pause();},300);
-              swal({
-                title:'温馨提示',
-                text:'该视频标题为'+data.title+'。检测到该视频标题含有NTR关键字，是否继续播放该视频？',
-                buttons:{
-                  cancel: {
-                    text: "播放",
-                    value: false,
-                    visible: true
-                  },
-                  confirm: {
-                    text: "不播放",
-                    value: true,
-                    visible: true
-                  }
-                }
-              }).then((value) => {
-                  clearInterval(listener1);
-                  clearInterval(listener);
-                  if (value) {
-                  document.querySelector('#closeButton').click();
-                  return;
-                  }else{
-                  videoElement.play();
-                }
+
+            // 根据清晰度从播放列表中选取链接
+            function getVideoUrlByQuality(list, quality) {
+                const found = list.find(item => item.name === quality);
+                return (found || list[0]).src.view;
+            }
+
+            // 显示随机热门选择
+            function showRandomHotPrompt() {
+                swal({
+                    text: '随机热门视频分为普通和 R18 内容，您要随机播放哪种内容？',
+                    icon: 'info',
+                    buttons: {
+                        cancel: {
+                            text: "关闭",
+                            value: false
+                        },
+                        r18: {
+                            text: "R18",
+                            value: 'R18'
+                        },
+                        general: {
+                            text: "普通",
+                            value: 'General'
+                        }
+                    }
+                }).then(choice => {
+                    if (!choice) return;
+                    let keyInfo = choice === 'R18' ? 'hots' : 'generalHots';
+                    let keyTs = choice === 'R18' ? 'ts' : 'generalTs';
+                    let rating = choice === 'R18' ? 'ecchi' : 'general';
+                    const cache = localStorage.getItem(keyInfo);
+                    const timestamp = parseInt(localStorage.getItem(keyTs) || '0');
+                    if (cache && !isExpired(timestamp)) {
+                        const list = JSON.parse(cache);
+                        inputVideo.value = list[getRandomInt(0, list.length - 1)].id;
+                        playVideoById();
+                    } else {
+                        fetch("/view?url=" + encodeURIComponent("https://api.iwara.tv/videos?rating=" + rating + "&sort=trending&limit=24"))
+                            .then(res => {
+                                if (!res.ok) throw '热门信息获取失败';
+                                return res.json();
+                            })
+                            .then(data => {
+                                const results = data.results || [];
+                                localStorage.setItem(keyInfo, JSON.stringify(results));
+                                localStorage.setItem(keyTs, Date.now().toString());
+                                if (results.length) {
+                                    inputVideo.value = results[getRandomInt(0, results.length - 1)].id;
+                                    playVideoById();
+                                }
+                            })
+                            .catch(err => swal({
+                                text: '出现错误：' + err,
+                                icon: 'error',
+                                button: '关闭'
+                            }));
+                    }
                 });
             }
 
-            // 要哈希的字符串
-            const inputString = id + "_" + fileExpires + "_5nFp9kmbNnHdAFhaqMvt";
-      
-            hashStringSHA1(inputString).then(hash => {
-              console.log("SHA-1 Hash:", hash);
-      
-              fetch(fileUrl.pathname + '?expires=' + fileExpires + '&hash=' + filehash + '&download=' + download,
-                { headers: { 'X-Version': hash } })
-                .then(response => {
-                  if(!response.ok){
-                  swal({
-                      text: '视频播放资源获取失败，请再次尝试获取！',
-                      icon:'error',
-                      button:'关闭'
-                    })
-                }else{
-                   return response.json();
-                }
-              }).then(data => {
-                  console.log(data);
-                  const videoUrl = 'https:' + getVideoViewUrlByQuality(data, videoQuality);
-                  console.log('获取视频链接：' + videoUrl);
-                  const FinUrl = '/view?url=' + encodeURIComponent(videoUrl);
-                  videoPlayUrl = FinUrl;
-                  console.log('最终视频播放链接：' + FinUrl);
-                  // 显示 iframeContainer 和 video 元素
-                  iframeContainer.style.display = 'flex';  // 显示 video 元素
-                  const videoSource = document.querySelector('.videoSource');
-                  videoSource.src = FinUrl;  // 设置 video 源链接
-                  videoElement.load();  // 加载视频
-                  videoElement.play();  // 播放视频
-                })
-                .catch(err => swal({
-                    text: '出现错误：'+err,
-                    icon:'error',
-                    button:'关闭'
-                  }))
-            });
-          })
-          .catch(error => swal({
-              text: '出现错误：'+error,
-              icon:'error',
-              button:'关闭'
-            }))
-      }
-       </script>
-     </body>
-   </html>   
-   `;
+            // 打开收藏列表（使用 template 克隆，不再移除原 DOM）
+            function openFavorites() {
+                const data = JSON.parse(localStorage.getItem('save') || '{}');
 
-   export default {
-      async fetch(request,env) {
-        let url = new URL(request.url);
-    if (url.pathname === '/') {
-          return new Response(html, {
-        headers: {
-          "content-type": "text/html;charset=UTF-8",
-        },
-      });
-        }else if (url.pathname.startsWith('/video/')) {
-          url.hostname = 'api.iwara.tv'
-          let new_request = new Request(url, request);
+                // 克隆模板内容
+                const template = document.getElementById('saveVideosTemplate');
+                const saveContainer = template.content.firstElementChild.cloneNode(true);
+
+                const saveTableBody = saveContainer.querySelector('tbody');
+                const pageSizeSelect = saveContainer.querySelector('#pageSizeSelect');
+                const firstPageBtn = saveContainer.querySelector('#firstPage');
+                const prevPageBtn = saveContainer.querySelector('#prevPage');
+                const nextPageBtn = saveContainer.querySelector('#nextPage');
+                const lastPageBtn = saveContainer.querySelector('#lastPage');
+                const pageInfo = saveContainer.querySelector('#pageInfo');
+                const paginationControls = saveContainer.querySelector('#paginationControls');
+
+                let currentPage = 1;
+                let pageSize = 5;
+                let totalPages = 1;
+
+                // 计算总页数
+                function calculateTotalPages() {
+                    const totalItems = Object.keys(data).length;
+                    totalPages = Math.ceil(totalItems / pageSize);
+                    if (totalPages === 0) totalPages = 1;
+                }
+
+                // 渲染当前页
+                function renderCurrentPage() {
+                    saveTableBody.innerHTML = '';
+
+                    const dataArray = Object.entries(data);
+                    const startIndex = (currentPage - 1) * pageSize;
+                    const endIndex = Math.min(startIndex + pageSize, dataArray.length);
+                    const cur = dataArray.slice(startIndex, endIndex);
+
+                    cur.forEach(([id, name]) => {
+                        const tr = document.createElement('tr');
+
+                        const td1 = document.createElement('td');
+                        td1.textContent = name;
+                        td1.dataset.id = id;
+
+                        const td2 = document.createElement('td');
+
+                        const btnPlay = document.createElement('button');
+                        btnPlay.textContent = '播放';
+                        btnPlay.style.cssText = "width:40%;height:100%;background:#33CCFF;color:#fff;border:none;border-radius:5px;";
+
+                        const btnDel = document.createElement('button');
+                        btnDel.textContent = '删除';
+                        btnDel.style.cssText = "margin-left:6px;width:40%;height:100%;background:#FF4665;color:#fff;border:none;border-radius:5px;";
+
+                        td2.appendChild(btnPlay);
+                        td2.appendChild(btnDel);
+
+                        tr.appendChild(td1);
+                        tr.appendChild(td2);
+                        saveTableBody.appendChild(tr);
+
+                        // 点击播放
+                        btnPlay.onclick = () => {
+                            inputVideo.value = id;
+                            swal.close();
+                            playVideoById();
+                        };
+
+                        // 点击删除
+                        btnDel.onclick = () => {
+                            if (confirm('确认删除 ' + name + ' 吗？')) {
+                                delete data[id];
+                                localStorage.setItem('save', JSON.stringify(data));
+                                calculateTotalPages();
+                                if (currentPage > totalPages) currentPage = totalPages;
+                                renderCurrentPage();
+                                updateControls();
+                            }
+                        };
+                    });
+
+                    // 空提示
+                    if (cur.length === 0) {
+                        const tr = document.createElement('tr');
+                        const td = document.createElement('td');
+                        td.colSpan = 2;
+                        td.textContent = '暂无收藏视频';
+                        td.style.textAlign = 'center';
+                        td.style.color = '#999';
+                        tr.appendChild(td);
+                        saveTableBody.appendChild(tr);
+                    }
+                }
+
+                // 更新分页控件
+                function updateControls() {
+                    pageInfo.textContent = '第 ' + currentPage + ' 页 / 共 ' + totalPages + ' 页';
+
+                    firstPageBtn.disabled = currentPage === 1;
+                    prevPageBtn.disabled = currentPage === 1;
+                    nextPageBtn.disabled = currentPage === totalPages;
+                    lastPageBtn.disabled = currentPage === totalPages;
+
+                    paginationControls.style.display = totalPages > 1 ? 'block' : 'none';
+                }
+
+                // 分页按钮
+                firstPageBtn.onclick = () => {
+                    currentPage = 1;
+                    renderCurrentPage();
+                    updateControls();
+                };
+
+                prevPageBtn.onclick = () => {
+                    if (currentPage > 1) currentPage--;
+                    renderCurrentPage();
+                    updateControls();
+                };
+
+                nextPageBtn.onclick = () => {
+                    if (currentPage < totalPages) currentPage++;
+                    renderCurrentPage();
+                    updateControls();
+                };
+
+                lastPageBtn.onclick = () => {
+                    currentPage = totalPages;
+                    renderCurrentPage();
+                    updateControls();
+                };
+
+                // 每页数量改变
+                pageSizeSelect.onchange = () => {
+                    pageSize = parseInt(pageSizeSelect.value);
+                    currentPage = 1;
+                    calculateTotalPages();
+                    renderCurrentPage();
+                    updateControls();
+                };
+
+                // 点击行复制链接
+                saveTableBody.addEventListener('click', e => {
+                    const tr = e.target.closest('tr');
+                    if (tr && !e.target.matches('button')) {
+                        const td = tr.querySelector('td');
+                        if (td && td.dataset.id) {
+                            copyLinkToClipboard('https://www.iwara.tv/video/' + td.dataset.id);
+                        }
+                    }
+                });
+
+                // 初始化
+                calculateTotalPages();
+                renderCurrentPage();
+                updateControls();
+
+                // SweetAlert 弹窗
+                swal({
+                    title: '我的收藏',
+                    content: saveContainer,
+                    buttons: {
+                        clear: {
+                            text: "清空收藏",
+                            value: 'clear'
+                        },
+                        export: {
+                            text: "导出收藏",
+                            value: 'export'
+                        },
+                        import: {
+                            text: "导入收藏",
+                            value: 'import'
+                        },
+                        close: {
+                            text: "关闭",
+                            value: null
+                        }
+                    }
+                }).then(act => {
+                    if (act === 'clear') {
+                        swal({
+                            title: '提示',
+                            text: '清空收藏不可恢复，是否确认？',
+                            icon: 'warning',
+                            buttons: ['取消', '清空']
+                        }).then(ok => {
+                            if (ok) {
+                                localStorage.removeItem('save');
+                                openFavorites();
+                            }
+                        });
+                    } else if (act === 'export') {
+                        exportFavorites();
+                    } else if (act === 'import') {
+                        importFavorites().then(() => openFavorites());
+                    }
+                });
+            }
+
+
+            function safePlay(video) {
+                const p = video.play();
+                if (p !== undefined && typeof p.then === 'function') {
+                    p.catch(err => {
+                        if (err.name === 'AbortError') {
+                            // 播放被打断是正常情况，忽略即可
+                            return;
+                        }
+                        console.error('play() 失败：', err);
+                    });
+                }
+            }
+
+            // 导出收藏
+            function exportFavorites() {
+                const data = localStorage.getItem('save');
+                if (data) {
+                    const blob = new Blob([data], {
+                        type: 'application/json'
+                    });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'Iwara收藏视频.json';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }
+            }
+
+            // 导入收藏（返回Promise）
+            function importFavorites() {
+                return new Promise((resolve) => {
+                    const input = document.createElement('input');
+                    input.type = 'file';
+                    input.accept = 'application/json';
+                    input.style.display = 'none';
+                    document.body.appendChild(input);
+
+                    input.addEventListener('change', () => {
+                        if (!input.files[0]) {
+                            resolve();
+                            return;
+                        }
+
+                        const reader = new FileReader();
+                        reader.readAsText(input.files[0]);
+                        reader.onload = () => {
+                            const imported = reader.result;
+                            if (localStorage.getItem('save')) {
+                                swal({
+                                    text: '已有收藏内容，导入将覆盖旧数据，是否继续？',
+                                    icon: 'warning',
+                                    buttons: {
+                                        cancel: '取消',
+                                        ok: '确定'
+                                    }
+                                }).then(ok => {
+                                    if (ok) {
+                                        localStorage.setItem('save', imported);
+                                    }
+                                    resolve();
+                                });
+                            } else {
+                                localStorage.setItem('save', imported);
+                                resolve();
+                            }
+                        };
+
+                        reader.onerror = () => {
+                            swal({
+                                text: '文件读取失败',
+                                icon: 'error'
+                            });
+                            resolve();
+                        };
+                    }, {
+                        once: true
+                    });
+
+                    input.click();
+                    // 如果用户取消选择文件，也需要resolve
+                    input.addEventListener('cancel', () => {
+                        setTimeout(resolve, 100);
+                    }, {
+                        once: true
+                    });
+                });
+            }
+
+            // 复制链接到剪切板
+            async function copyLinkToClipboard(url = null) {
+                try {
+                    const link = url || (() => {
+                        const u = new URL(location.origin);
+                        u.searchParams.set('id', inputVideo.value.trim() || 'Hvfo6PVnB9mnsD');
+                        u.searchParams.set('quality', selectQuality.value);
+                        return u.href;
+                    })();
+                    await navigator.clipboard.writeText(link);
+                    swal("链接已复制到剪切板！", {
+                        icon: "success",
+                        buttons: false,
+                        timer: 2000
+                    });
+                } catch (err) {
+                    swal({
+                        text: '复制失败：' + err,
+                        icon: 'error',
+                        button: '关闭'
+                    });
+                }
+            }
+
+            // 判断时间是否超过一天
+            function isExpired(timestamp) {
+                return Date.now() - timestamp > 24 * 60 * 60 * 1000;
+            }
+
+            // 获取 [min, max] 区间随机整数
+            const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+        })();
+
+        (function() {
+            const footer = document.querySelector('.footer');
+            const page = document.querySelector('.page');
+
+            if (!footer || !page) return;
+
+            // 设置一个 helper：把 footer 底部偏移设置为键盘高度（单位 px）
+            function setFooterAboveKeyboard(keyboardHeightPx) {
+                footer.style.bottom = keyboardHeightPx + 'px';
+            }
+
+            // 当没有 visualViewport 时，退回到 focus/blur 的简单隐藏策略
+            if (window.visualViewport) {
+                const vv = window.visualViewport;
+
+                // 初始确保 footer 底部为 0
+                setFooterAboveKeyboard(0);
+
+                vv.addEventListener('resize', () => {
+                    // 计算键盘高度：视口（layout）高度减去 visualViewport 高度
+                    const keyboardHeight = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
+                    if (keyboardHeight > 50) {
+                        // 键盘明显弹起
+                        setFooterAboveKeyboard(keyboardHeight);
+                    } else {
+                        // 键盘收回
+                        setFooterAboveKeyboard(0);
+                    }
+                });
+                // 兼顾 scroll 变化（某些浏览器在键盘弹出时不会触发 resize）
+                vv.addEventListener('scroll', () => {
+                    const keyboardHeight = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
+                    setFooterAboveKeyboard(keyboardHeight > 50 ? keyboardHeight : 0);
+                });
+            } else {
+                // 退回兼容：给所有可聚焦 input/textarea/select 添加 focus/blur 事件
+                const inputs = document.querySelectorAll('input, textarea, select');
+                inputs.forEach(el => {
+                    el.addEventListener('focus', () => footer.style.display = 'none');
+                    el.addEventListener('blur', () => footer.style.display = '');
+                });
+            }
+
+            // 小优化：当 overlay （iframeContainer） 显示时隐藏 footer，避免遮挡
+            const iframeContainer = document.getElementById('iframeContainer');
+            if (iframeContainer) {
+                const obs = new MutationObserver(() => {
+                    const shown = getComputedStyle(iframeContainer).display !== 'none';
+                    footer.style.display = shown ? 'none' : '';
+                });
+                obs.observe(iframeContainer, {
+                    attributes: true,
+                    attributeFilter: ['style', 'class']
+                });
+            }
+        })();
+    </script>
+</body>
+
+</html>
+`
+
+export default {
+    async fetch(request,env) {
+      let url = new URL(request.url);
+  if (url.pathname === '/') {
+        return new Response(html, {
+      headers: {
+        "content-type": "text/html;charset=UTF-8",
+      },
+    });
+      }else if (url.pathname.startsWith('/video/')) {
+        url.hostname = 'api.iwara.tv'
+        let new_request = new Request(url, request);
+        return fetch(new_request);
+      }else if (url.pathname.startsWith('/view')) {
+          let Finurl  = url.searchParams.get('url');
+          let new_request = new Request(Finurl, request);
           return fetch(new_request);
-        }else if (url.pathname.startsWith('/view')) {
-            let Finurl  = url.searchParams.get('url');
-            let new_request = new Request(Finurl, request);
+        }else if (url.pathname.startsWith('/file/')) {
+            url.hostname = 'files.iwara.tv'
+            let new_request = new Request(url, request);
             return fetch(new_request);
-          }else if (url.pathname.startsWith('/file/')) {
-              url.hostname = 'files.iwara.tv'
-              let new_request = new Request(url, request);
-              return fetch(new_request);
-            }
-        return env.ASSETS.fetch(request);
-      }
-    };
+          }
+      return env.ASSETS.fetch(request);
+    }
+  };

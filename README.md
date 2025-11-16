@@ -18,10 +18,6 @@ server.js是项目反代js文件，结合index.html可完成私有化部署。
 
 方法二：如果您想将完整服务部署到自己的服务器（非中国大陆地区），下载index.html和server.js两个文件。
 
-> [!CAUTION]
-> 注意：第三方反代也可自行部署，源码链接如下：
-> https://github.com/gnuns/allOrigins/tree/main
-
 📦 安装依赖
 
 在项目根目录执行：
@@ -34,6 +30,10 @@ node server.js
 成功后会看到（直接访问即可）：
 
 反代服务器已启动：http://localhost:8000
+
+> [!CAUTION]
+> 注意：第三方反代也可自行部署，源码链接如下：
+> https://github.com/gnuns/allOrigins/tree/main
 
 ## 示例网站：
 
@@ -50,6 +50,9 @@ https://ss.ixq.pp.ua
 [Cloudflare](https://www.cloudflare.com/)
 
 [SweetAlert](https://sweetalert.js.org/)
+
+[gnuns](https://github.com/gnuns/)
+
 
 
 

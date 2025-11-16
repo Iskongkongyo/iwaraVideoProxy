@@ -20,7 +20,7 @@ server.js是项目反代js文件，结合index.html可完成私有化部署。
 
 > [!CAUTION]
 > 注意：第三方反代也可自行部署，源码链接如下：
-> ![第三方反代源码]([https://files.catbox.moe/3on5gp.png](https://github.com/gnuns/allOrigins/tree/main))
+> https://github.com/gnuns/allOrigins/tree/main
 
 📦 安装依赖
 
@@ -31,9 +31,9 @@ npm install express node-fetch cors
 ▶ 启动服务器
 node server.js
 
-成功后会看到：
+成功后会看到（直接访问即可）：
 
-反代服务器已启动：http://localhost:8000（访问这个链接即可）
+反代服务器已启动：http://localhost:8000
 
 ## 示例网站：
 
@@ -50,6 +50,7 @@ https://ss.ixq.pp.ua
 [Cloudflare](https://www.cloudflare.com/)
 
 [SweetAlert](https://sweetalert.js.org/)
+
 
 
 

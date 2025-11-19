@@ -169,6 +169,10 @@ const html = `
             background: #33CCFF;
         }
 
+        .btn-token {
+            background: #FF69B4;
+        }
+
         @media (max-width: 768px) {
             .link-area {
                 flex-direction: column;
@@ -436,6 +440,7 @@ const html = `
                 <button id="hot" class="btn btn-hot">随机热门</button>
                 <button id="save" class="btn btn-save">打开收藏</button>
                 <button id="share" class="btn btn-share">分享视频</button>
+                <button id="token" class="btn btn-token">填写令牌</button>
             </div>
             <div class="footer">
                 Copyright &copy; 在线 Iwara 视频播放网站 All Rights Reserved
@@ -459,6 +464,7 @@ const html = `
             const btnHot = document.getElementById('hot');
             const btnOpenSave = document.getElementById('save');
             const btnShare = document.getElementById('share');
+            const btnToken = document.getElementById('token');
             const saveContainer = document.getElementById('saveVideos');
 
             let currentPlayId = '',
@@ -511,6 +517,7 @@ const html = `
             btnHot.addEventListener('click', showRandomHotPrompt);
             btnOpenSave.addEventListener('click', () => openFavorites());
             btnShare.addEventListener('click', () => copyLinkToClipboard());
+            btnToken.addEventListener('click', () => saveToken());
             btnCloseOverlay.addEventListener('click', () => {
                 videoElement.pause();
                 videoElement.currentTime = 0;
@@ -577,7 +584,7 @@ const html = `
                 try {
                     const res = await fetch('/video/' + id, {
                         headers: {
-                            authorization: ''
+                            authorization: localStorage.getItem('token') ? 'Bearer ' + localStorage.getItem('token') : ''
                         }
                     });
                     if (!res.ok) {
@@ -716,6 +723,9 @@ const html = `
             // 打开收藏列表（使用 template 克隆，不再移除原 DOM）
             function openFavorites() {
                 const data = JSON.parse(localStorage.getItem('save') || '{}');
+                const entries = Object.entries(data);
+                const reversedEntries = entries.reverse();
+                const reversedData = Object.fromEntries(reversedEntries);
 
                 // 克隆模板内容
                 const template = document.getElementById('saveVideosTemplate');
@@ -736,7 +746,7 @@ const html = `
 
                 // 计算总页数
                 function calculateTotalPages() {
-                    const totalItems = Object.keys(data).length;
+                    const totalItems = Object.keys(reversedData).length;
                     totalPages = Math.ceil(totalItems / pageSize);
                     if (totalPages === 0) totalPages = 1;
                 }
@@ -745,7 +755,7 @@ const html = `
                 function renderCurrentPage() {
                     saveTableBody.innerHTML = '';
 
-                    const dataArray = Object.entries(data);
+                    const dataArray = Object.entries(reversedData);
                     const startIndex = (currentPage - 1) * pageSize;
                     const endIndex = Math.min(startIndex + pageSize, dataArray.length);
                     const cur = dataArray.slice(startIndex, endIndex);
@@ -784,7 +794,10 @@ const html = `
                         // 点击删除
                         btnDel.onclick = () => {
                             if (confirm('确认删除 ' + name + ' 吗？')) {
-                                delete data[id];
+                                delete reversedData[id];
+                                const entries = Object.entries(reversedData);
+                                const reversedEntries = entries.reverse();
+                                const data = Object.fromEntries(reversedEntries);
                                 localStorage.setItem('save', JSON.stringify(data));
                                 calculateTotalPages();
                                 if (currentPage > totalPages) currentPage = totalPages;
@@ -912,6 +925,51 @@ const html = `
                 });
             }
 
+            //检查 JWT Token 格式是否正确
+            function isJwtValid(token) {
+                try {
+                    if (typeof token !== 'string' || token.trim() === '') {
+                        return false; // 空或非字符串
+                    }
+
+                    const parts = token.split('.');
+                    if (parts.length !== 3) {
+                        return false; // JWT 必须由三部分组成
+                    }
+
+                    return true;
+
+                } catch (err) {
+                    console.error('Token 解析失败:', err);
+                    return false;
+                }
+            }
+
+            // 保存Token
+            function saveToken() {
+                swal("某些视频由于作者设置，需要Token进行身份验证才能观看：", {
+                        content: "input",
+                        button: "确定"
+                    })
+                    .then((value) => {
+
+                        if (isJwtValid(value)) {
+                            localStorage.setItem('token', value);
+                            swal({
+                                text: "令牌填写成功！",
+                                icon: "success",
+                                button: "确定"
+                            });
+                        } else {
+                            swal({
+                                text: "令牌格式有误！",
+                                icon: "error",
+                                button: "确定"
+                            });
+                        }
+
+                    });
+            }
 
             function safePlay(video) {
                 const p = video.play();
@@ -1115,6 +1173,16 @@ export default {
         return fetch(new_request);
       }else if (url.pathname.startsWith('/view')) {
           let Finurl  = url.searchParams.get('url');
+          const decoded = decodeURIComponent(Finurl); // 解码
+          const urlObj = new URL(decoded);// 解析 URL
+          const isIwaraUrl = (urlObj.protocol === "http:" || urlObj.protocol === "https:") && urlObj.hostname.endsWith(".iwara.tv");
+          if(!isIwaraUrl){
+            return new Response('{ error: "禁止滥用反代其他域名！" }', {
+                headers: {
+                  "content-type": "text/html;charset=UTF-8",
+                },
+              })
+          } 
           let new_request = new Request(Finurl, request);
           return fetch(new_request);
         }else if (url.pathname.startsWith('/file/')) {
@@ -1124,4 +1192,5 @@ export default {
           }
       return env.ASSETS.fetch(request);
     }
+
   };

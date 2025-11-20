@@ -931,14 +931,22 @@ const html = `
                     if (typeof token !== 'string' || token.trim() === '') {
                         return false; // 空或非字符串
                     }
-
+            
                     const parts = token.split('.');
                     if (parts.length !== 3) {
                         return false; // JWT 必须由三部分组成
                     }
-
-                    return true;
-
+            
+                    // 解码 payload（Base64URL 转换）
+                    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+            
+                    // 检查 exp（过期时间，单位秒）
+                    if (!payload.exp || typeof payload.exp !== 'number') {
+                        return false; // 没有过期时间
+                    }
+            
+                    const now = Math.floor(Date.now() / 1000); // 当前时间（秒）
+                    return payload.exp > now; // true 表示未过期
                 } catch (err) {
                     console.error('Token 解析失败:', err);
                     return false;
@@ -947,7 +955,7 @@ const html = `
 
             // 保存Token
             function saveToken() {
-                swal("某些视频由于作者设置，需要Token进行身份验证才能观看：", {
+                swal("有些视频没法播放可能是需要Token进行登录验证才能观看！Token获取方法：PC端按“F12”，在弹出的窗口中选择控制台，输入“localStorage.getItem('token')”后按回车，把输出的内容复制到下方确认即可！", {
                         content: "input",
                         button: "确定"
                     })
@@ -962,7 +970,7 @@ const html = `
                             });
                         } else {
                             swal({
-                                text: "令牌格式有误！",
+                                text: "令牌格式有误或已过期！",
                                 icon: "error",
                                 button: "确定"
                             });

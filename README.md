@@ -43,7 +43,7 @@ Cloudflare Worker 默认提供的 `*.workers.dev` 域名
  因此请务必绑定你托管在 Cloudflare 上的域名。
 
 > **正确做法：**
->  Cloudflare → Worker → 触发器 → 自定义域 → 添加你自己的域名
+> Cloudflare → Worker → 触发器 → 自定义域 → 添加你自己的域名
 >
 > 绑定后即可在国内正常访问。
 
@@ -127,7 +127,7 @@ pip install -r requirements.txt
 ```
 
 > 若无 requirements.txt，请手动安装：
->  `pip install flask requests`（根据你 server.py 中的实际依赖）
+> `pip install flask requests`（根据你 server.py 中的实际依赖）
 
 ### 启动服务器
 
@@ -164,4 +164,3 @@ http://localhost:8000
 - [Cloudflare](https://www.cloudflare.com/)
 - [SweetAlert](https://sweetalert.js.org/)
 - [gnuns](https://github.com/gnuns)
-

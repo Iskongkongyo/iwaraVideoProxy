@@ -16,10 +16,15 @@
 | **server.py**           | Python 后端版本，功能与 Node.js 版本相同。                   |
 | **allOrigins-main.zip** | Github开源反代Nodejs项目。                                   |
 | **sweetalert.min.js**   | Github开源基于JS封装的可以自定义美化的提示框。               |
+| **crypto-js.min.js**    | 在不安全环境下替换原生安全API“crypto.subtle”。               |
 
 ------
 
 ## 🚀 部署方式（推荐程度从高到低）
+
+> [!CAUTION]
+>
+> 在不安全上下文环境（如：使用http协议等）中，请下载“不安全上下文”目录下的index.html作为Iwara视频反代的前端页面！！！
 
 ### 1️⃣ Cloudflare Worker 部署（最推荐、最快速、最稳定）
 

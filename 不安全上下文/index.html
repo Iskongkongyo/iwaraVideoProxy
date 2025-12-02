@@ -307,7 +307,6 @@
             }
         }
 
-        /* footer 改为 absolute，在底部定位（JS 会动态调整 bottom） */
         .footer {
             position: absolute;
             left: 0;
@@ -316,10 +315,10 @@
             padding: 12px 10px;
             color: #7e7e7e;
             text-align: center;
-            background: rgba(255, 255, 255, 0.95);
+            background: rgba(255, 255, 255, 1);
             box-shadow: 0 -4px 12px rgba(0, 0, 0, 0);
             z-index: 999;
-            padding-bottom: calc(env(safe-area-inset-bottom, 0) + 120px);
+            padding-bottom: calc(env(safe-area-inset-bottom, 0) + 140px);
         }
 
         .footer a {
@@ -524,6 +523,22 @@
                     inputVideo.value = idParam;
                     selectQuality.value = qualityParam || selectQuality.value;
                     playVideoById();
+                }
+            });
+
+            // 记录初始窗口高度
+            let winHeight = window.innerHeight;
+
+            // 监听窗口大小变化
+            window.addEventListener('resize', function() {
+                var thisHeight = window.innerHeight;
+
+                if (winHeight - thisHeight > 40) {
+                    // 键盘弹出
+                    document.querySelector('.footer').style.display = 'none';
+                } else {
+                    // 键盘收起
+                    document.querySelector('.footer').style.display = 'block';
                 }
             });
 
@@ -1121,63 +1136,6 @@
             // 获取 [min, max] 区间随机整数
             const getRandomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 
-        })();
-
-        (function() {
-            const footer = document.querySelector('.footer');
-            const page = document.querySelector('.page');
-
-            if (!footer || !page) return;
-
-            // 设置一个 helper：把 footer 底部偏移设置为键盘高度（单位 px）
-            function setFooterAboveKeyboard(keyboardHeightPx) {
-                footer.style.bottom = keyboardHeightPx + 'px';
-            }
-
-            // 当没有 visualViewport 时，退回到 focus/blur 的简单隐藏策略
-            if (window.visualViewport) {
-                const vv = window.visualViewport;
-
-                // 初始确保 footer 底部为 0
-                setFooterAboveKeyboard(0);
-
-                vv.addEventListener('resize', () => {
-                    // 计算键盘高度：视口（layout）高度减去 visualViewport 高度
-                    const keyboardHeight = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
-                    if (keyboardHeight > 50) {
-                        // 键盘明显弹起
-                        setFooterAboveKeyboard(keyboardHeight);
-                    } else {
-                        // 键盘收回
-                        setFooterAboveKeyboard(0);
-                    }
-                });
-                // 兼顾 scroll 变化（某些浏览器在键盘弹出时不会触发 resize）
-                vv.addEventListener('scroll', () => {
-                    const keyboardHeight = Math.max(0, window.innerHeight - vv.height - (vv.offsetTop || 0));
-                    setFooterAboveKeyboard(keyboardHeight > 50 ? keyboardHeight : 0);
-                });
-            } else {
-                // 退回兼容：给所有可聚焦 input/textarea/select 添加 focus/blur 事件
-                const inputs = document.querySelectorAll('input, textarea, select');
-                inputs.forEach(el => {
-                    el.addEventListener('focus', () => footer.style.display = 'none');
-                    el.addEventListener('blur', () => footer.style.display = '');
-                });
-            }
-
-            // 小优化：当 overlay （iframeContainer） 显示时隐藏 footer，避免遮挡
-            const iframeContainer = document.getElementById('iframeContainer');
-            if (iframeContainer) {
-                const obs = new MutationObserver(() => {
-                    const shown = getComputedStyle(iframeContainer).display !== 'none';
-                    footer.style.display = shown ? 'none' : '';
-                });
-                obs.observe(iframeContainer, {
-                    attributes: true,
-                    attributeFilter: ['style', 'class']
-                });
-            }
         })();
     </script>
 </body>

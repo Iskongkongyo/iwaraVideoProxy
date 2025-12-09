@@ -607,7 +607,9 @@ const html = `
 					  buttons: false,
 					  timer: 3000,
 					});
-				}
+				}else {
+                                         return;
+                                         }
 				
 				currentVideoUrl = finUrl;
 				

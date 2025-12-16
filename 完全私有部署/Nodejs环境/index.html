@@ -27,7 +27,7 @@
 
 			body {
 				background: #fff;
-				padding-bottom: 60px;
+				padding-bottom: calc(env(safe-area-inset-bottom, 0) + 80px);
 			}
 
 			#github {
@@ -308,18 +308,18 @@
 			}
 
 			.footer {
-				position: absolute;
+				position: fixed;
 				left: 0;
 				right: 0;
 				bottom: 0;
 				padding: 12px 10px;
 				color: #7e7e7e;
 				text-align: center;
-				background: rgba(255, 255, 255, 1);
-				box-shadow: 0 -4px 12px rgba(0, 0, 0, 0);
+				background: #fff;
 				z-index: 999;
-				padding-bottom: calc(env(safe-area-inset-bottom, 0) + 140px);
+				padding-bottom: calc(env(safe-area-inset-bottom, 0) + 20px);
 			}
+
 
 			.footer a {
 				color: #ff4665;
@@ -412,7 +412,7 @@
 			<button id="saveButton">收藏</button>
 			<button id="downButton">下载</button>
 			<button id="closeButton">关闭</button>
-			<video id="myVideo" controls autoplay>
+			<video id="myVideo" controls>
 				<source class="videoSource" src="" type="video/mp4" />
 				<source class="videoSource" src="" type="video/webm">
 				<source class="videoSource" src="" type="video/ogg">
@@ -524,8 +524,6 @@
 					if (goToIwara) {
 						const shareId = new URL(location.href).searchParams.get('id');
 						location.replace(shareId ? 'https://www.iwara.tv/video/' + shareId : 'https://www.iwara.tv');
-					} else {
-						safePlay(videoElement);
 					}
 				});
 
@@ -572,6 +570,9 @@
 					videoElement.pause();
 					videoElement.currentTime = 0;
 					iframeContainer.style.display = 'none';
+                                        // 清除旧监听器（避免重复绑定）
+					videoElement.onerror = null;
+					document.querySelectorAll('.videoSource').forEach(src => src.onerror = null);
 				});
 
 				// 输入框 URL 转 ID 解析
@@ -611,9 +612,9 @@
 							buttons: false,
 							timer: 3000,
 						});
-					}else {
-                                               return;
-                                                }
+					} else {
+						return;
+					}
 
 					currentVideoUrl = finUrl;
 
@@ -625,9 +626,8 @@
 					iframeContainer.style.display = 'none';
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
-					videoSource.src = finalUrl; // 设置 video 源链接
+					videoSource.src = finalUrl + '#t=0'; // 设置 video 源链接
 					videoElement.load(); // 加载视频
-					safePlay(videoElement); // 播放视频
 				});
 
 				// 收藏按钮（覆盖当前视频）
@@ -749,9 +749,13 @@
 						iframeContainer.style.display = 'none';
 						iframeContainer.style.display = 'flex';
 						const videoSource = document.querySelector('.videoSource');
-						videoSource.src = finalUrl; // 设置 video 源链接
+						videoSource.src = finalUrl + '#t=0'; // 设置 video 源链接
+						// 清除旧监听器（避免重复绑定）
+						videoElement.onerror = null;
+						document.querySelectorAll('.videoSource').forEach(src => src.onerror = null);
+						// 绑定监听器
+						bindVideoErrorHandlers();
 						videoElement.load(); // 加载视频
-						safePlay(videoElement); // 播放视频
 
 					} catch (err) {
 						swal({
@@ -760,6 +764,35 @@
 							button: '关闭'
 						});
 					}
+				}
+
+				// 监听视频播放失败事件
+				function bindVideoErrorHandlers() {
+					const handleVideoError = () => {
+						swal({
+							title: '播放失败',
+							text: '媒体无法加载，可能是服务器或网络故障，或者格式不被支持！是否重新请求视频？',
+							buttons: {
+								cancel: {
+									text: "关闭",
+									value: false,
+									visible: true
+								},
+								confirm: {
+									text: "重新请求",
+									value: true
+								}
+							}
+						}).then(req => {
+							videoElement.pause();
+							if (req) playVideoById();
+						});
+					};
+
+					videoElement.addEventListener('error', handleVideoError);
+					document.querySelectorAll('.videoSource').forEach(src => {
+						src.addEventListener('error', handleVideoError);
+					});
 				}
 
 				// 根据清晰度从播放列表中选取链接
@@ -1083,19 +1116,6 @@
 							}
 
 						});
-				}
-
-				function safePlay(video) {
-					const p = video.play();
-					if (p !== undefined && typeof p.then === 'function') {
-						p.catch(err => {
-							if (err.name === 'AbortError') {
-								// 播放被打断是正常情况，忽略即可
-								return;
-							}
-							console.error('play() 失败：', err);
-						});
-					}
 				}
 
 				// 导出收藏

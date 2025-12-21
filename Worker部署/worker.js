@@ -833,7 +833,7 @@ const html = `
 							inputVideo.value = list[getRandomInt(0, list.length - 1)].id;
 							playVideoById();
 						} else {
-							fetch("/view?url=https://api.iwara.tv/videos?rating=" + rating + "&sort=trending&limit=24")
+							fetch("/view?url=" + encodeURIComponent("https://api.iwara.tv/videos?rating=" + rating + "&sort=trending&limit=24"))
 								.then(res => {
 									if (!res.ok) throw '热门信息获取失败';
 									return res.json();

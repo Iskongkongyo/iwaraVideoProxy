@@ -96,21 +96,21 @@ async function proxyJSON(req, res, targetUrl) {
 }
 
 // ---------------------------------------------------
-// /video → 反代 api.iwara.tv
+// /video → 反代 apiq.iwara.tv
 // ---------------------------------------------------
 app.use(/^\/video(.*)/, async (req, res) => {
   const target =
     "https://api.allorigins.win/raw?url=" +
-    encodeURIComponent("https://api.iwara.tv" + req.originalUrl);
+    encodeURIComponent("https://apiq.iwara.tv" + req.originalUrl);
 
   await proxyJSON(req, res, target);
 });
 
 // ---------------------------------------------------
-// /file/... → 反代 files.iwara.tv
+// /file/... → 反代 filesq.iwara.tv
 // ---------------------------------------------------
 app.use("/file", async (req, res) => {
-  const remote = "https://files.iwara.tv" + req.originalUrl;
+  const remote = "https://filesq.iwara.tv" + req.originalUrl;
   await proxyJSON(req, res, remote);
 });
 

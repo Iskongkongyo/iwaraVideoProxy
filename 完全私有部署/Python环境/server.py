@@ -83,7 +83,7 @@ def is_iwara_url(encoded_url: str) -> bool:
 def video_proxy(subpath=''):
     """视频 API 反代"""
     try:
-        target_url = f"https://api.iwara.tv{request.full_path}"
+        target_url = f"https://apiq.iwara.tv{request.full_path}"
         
         logger.info(f"反代请求：{target_url}")
         
@@ -106,7 +106,7 @@ def video_proxy(subpath=''):
 def file_proxy(subpath=''):
     """文件反代 - 直接访问 files.iwara.tv"""
     try:
-        target_url = f"https://files.iwara.tv{request.full_path}"
+        target_url = f"https://filesq.iwara.tv{request.full_path}"
         
         logger.info(f"反代请求：{target_url}")
         

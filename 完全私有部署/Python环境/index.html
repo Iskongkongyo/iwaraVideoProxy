@@ -658,7 +658,53 @@
 				currentVideoUrl = '';
 
 			const swalAlert = (text, icon = 'error', button = '关闭') => swal({ text, icon, button });
+			const SENSITIVE_TAG_MAP = {
+				qos: '\u5a9a\u9ed1\u5185\u5bb9',
+				ntr: '\u725b\u5934\u4eba\u5185\u5bb9',
+				netorare: '\u542b NTR \u5185\u5bb9',
+				slut: '\u8361\u5987\u5411\u5185\u5bb9',
+				asphyxiation: '\u7a92\u606f\u73a9\u6cd5\u5185\u5bb9',
+				face_fuck: '\u7c97\u66b4\u53e3\u4ea4\u5185\u5bb9',
+				r18g: '\u91cd\u53e3\u5411\u5185\u5bb9',
+				monster: '\u602a\u7269\u5185\u5bb9',
+				monster_cock: '\u602a\u7269\u9634\u830e',
+				hilichurl: '\u4e18\u4e18\u4eba/\u602a\u7269\u5185\u5bb9',
+				huge_penis: '\u5de8\u5927\u9634\u830e\u5185\u5bb9',
+				bbc: '\u5f3a\u8c03\u9ed1\u4eba\u5927\u9634\u830e\u7684\u6027\u5185\u5bb9',
+				big_balls: '\u5de8\u5927\u776a\u4e38\u5185\u5bb9',
+				'3p': '\u591a\u4eba\u6027\u884c\u4e3a\u5185\u5bb9'
+			};
+			const SENSITIVE_TAG_IDS = new Set(Object.keys(SENSITIVE_TAG_MAP));
 
+			function formatSensitiveTagLabel(tagId) {
+				const desc = SENSITIVE_TAG_MAP[tagId];
+				return desc ? (tagId + '\uff08' + desc + '\uff09') : tagId;
+			}
+
+			function detectSensitiveContent(data) {
+				const title = String(data && data.title || '');
+				const titleLower = title.toLowerCase();
+				const titleHits = [];
+				for (const tagId of SENSITIVE_TAG_IDS) {
+					if (titleLower.includes(tagId)) titleHits.push(tagId);
+				}
+
+				const tagHits = [];
+				if (Array.isArray(data && data.tags)) {
+					for (const tag of data.tags) {
+						const tagId = String(tag && tag.id || '').toLowerCase();
+						if (tagId && SENSITIVE_TAG_IDS.has(tagId) && !tagHits.includes(tagId)) {
+							tagHits.push(tagId);
+						}
+					}
+				}
+
+				return {
+					matched: titleHits.length > 0 || tagHits.length > 0,
+					titleHits,
+					tagHits
+				};
+			}
 			const fetchJson = async (url, options = {}) => {
 				const res = await fetch(url, options);
 				const data = await res.json();
@@ -984,12 +1030,20 @@
 					window.currentYoutubeId = null;
 
 					currentVideoName = data.title + '.' + data.file.mime.replace('video/', '');
-					// NTR 标题提示
-					if (/NTR/i.test(data.title)) {
+					// Sensitive content prompt (title + tags, case-insensitive)
+					const sensitiveCheck = detectSensitiveContent(data);
+					if (sensitiveCheck.matched) {
+						const hitParts = [];
+						if (sensitiveCheck.titleHits.length) {
+							hitParts.push('标题: ' + sensitiveCheck.titleHits.map(formatSensitiveTagLabel).join(', '));
+						}
+						if (sensitiveCheck.tagHits.length) {
+							hitParts.push('标签: ' + sensitiveCheck.tagHits.map(formatSensitiveTagLabel).join(', '));
+						}
 						let pauseIntv = setInterval(() => videoElement.pause(), 300);
 						const proceed = await swal({
 							title: '温馨提示',
-							text: '检测到视频标题 ' + data.title + ' 中包含 NTR 关键字，是否继续播放？',
+							text: '检测到高敏感内容' + hitParts.join('；') + '，是否继续观看？',
 							buttons: {
 								cancel: {
 									text: "播放",
@@ -1008,8 +1062,6 @@
 							return;
 						}
 					}
-
-					// 计算播放链接
 					const fileUrl = new URL(data.fileUrl);
 					const filehash = fileUrl.searchParams.get('hash');
 					const fileExpires = fileUrl.searchParams.get('expires');

@@ -445,13 +445,22 @@
 			background: #FF4665;
 		}
 
+		#playerActions {
+			position: absolute;
+			top: 15px;
+			right: 15px;
+			z-index: 1001;
+			display: flex;
+			align-items: center;
+			gap: 10px;
+		}
+
 		#changeButton,
+		#shareMomentButton,
 		#saveButton,
 		#downButton,
 		#closeButton {
-			position: absolute;
-			top: 15px;
-			z-index: 1001;
+			position: static;
 			border: none;
 			padding: 8px 15px;
 			border-radius: 6px;
@@ -464,53 +473,43 @@
 
 		#changeButton {
 			background: rgba(255, 68, 170, 0.8);
-			right: 250px;
+		}
+
+		#shareMomentButton {
+			background: rgba(51, 204, 255, 0.85);
 		}
 
 		#saveButton {
 			background: rgba(204, 204, 0, 0.8);
-			right: 170px;
 		}
 
 		#downButton {
 			background: rgba(135, 206, 235, 0.8);
-			right: 90px;
 		}
 
 		#closeButton {
 			background: rgba(255, 0, 0, 0.8);
-			right: 15px;
 		}
 
 		@media (max-width: 600px) {
+			#playerActions {
+				top: 10px;
+				right: 10px;
+				gap: 6px;
+			}
 
 			#changeButton,
+			#shareMomentButton,
 			#saveButton,
 			#downButton,
 			#closeButton {
 				padding: 6px 10px;
 				font-size: 12px;
-				top: 10px;
-			}
-
-			#changeButton {
-				right: 190px;
-			}
-
-			#saveButton {
-				right: 130px;
-			}
-
-			#downButton {
-				right: 70px;
-			}
-
-			#closeButton {
-				right: 10px;
 			}
 		}
 
 		#changeButton:hover,
+		#shareMomentButton:hover,
 		#saveButton:hover,
 		#downButton:hover,
 		#closeButton:hover {
@@ -627,10 +626,13 @@
 	</div>
 
 	<div id="iframeContainer">
+		<div id="playerActions">
 		<button id="changeButton">切换播放源</button>
+		<button id="shareMomentButton">分享此刻</button>
 		<button id="saveButton">收藏</button>
 		<button id="downButton">下载</button>
 		<button id="closeButton">关闭</button>
+	</div>
 		<video id="myVideo" controls playsinline webkit-playsinline x5-playsinline>
 			<source class="videoSource" src="" type="video/mp4" />
 			<source class="videoSource" src="" type="video/webm">
@@ -700,6 +702,7 @@
 			const iframeContainer = q('#iframeContainer');
 			const videoElement = q('#myVideo');
 			const btnChangeOrigin = q('#changeButton');
+			const btnShareMoment = q('#shareMomentButton');
 			const btnSaveOverlay = q('#saveButton');
 			const btnDownload = q('#downButton');
 			const btnCloseOverlay = q('#closeButton');
@@ -714,7 +717,8 @@
 
 			let currentPlayId = '',
 				currentVideoName = '',
-				currentVideoUrl = '';
+				currentVideoUrl = '',
+				pendingStartTimeSec = 0;
 
 			const swalAlert = (text, icon = 'error', button = '关闭') => swal({ text, icon, button });
 			const loadingMask = q('#loadingMask');
@@ -957,9 +961,11 @@
 
 				const idParam = new URLSearchParams(location.search).get('id');
 				const qualityParam = new URLSearchParams(location.search).get('quality');
+				const tParam = new URLSearchParams(location.search).get('t');
 				if (idParam) {
 					inputVideo.value = idParam;
 					selectQuality.value = qualityParam || selectQuality.value;
+					pendingStartTimeSec = parseStartTimeSec(tParam);
 					playVideoById();
 				} else {
 					setTimeout(() => {
@@ -969,6 +975,17 @@
 					}, 1800);
 				}
 			});
+
+			function parseStartTimeSec(rawValue) {
+				const sec = Number.parseInt(rawValue, 10);
+				return Number.isFinite(sec) && sec > 0 ? sec : 0;
+			}
+
+			function getStartTimeForPlayback() {
+				const sec = pendingStartTimeSec > 0 ? pendingStartTimeSec : 0;
+				pendingStartTimeSec = 0;
+				return sec;
+			}
 			let winHeight = window.innerHeight;
 			window.addEventListener('orientationchange', () => {
 				setTimeout(() => {
@@ -1050,6 +1067,7 @@
 			btnHot.addEventListener('click', showRandomHotPrompt);
 			btnOpenSave.addEventListener('click', () => openFavorites());
 			btnShare.addEventListener('click', () => copyLinkToClipboard());
+			btnShareMoment.addEventListener('click', () => copyMomentLinkToClipboard());
 			btnToken.addEventListener('click', () => saveToken());
 			btnCloseOverlay.addEventListener('click', () => {
 				videoElement.pause();
@@ -1170,7 +1188,7 @@
 					iframeContainer.style.display = 'none';
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
-					videoSource.src = finalUrl + '#t=0'; // 设置 video 源链接
+					videoSource.src = finalUrl + '#t=' + getStartTimeForPlayback(); // 设置 video 源链接
 					videoElement.load(); // 加载视频
 				});
 			});
@@ -1404,7 +1422,7 @@
 					iframeContainer.style.display = 'none';
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
-					videoSource.src = finalUrl + '#t=0'; // 设置 video 源链接
+					videoSource.src = finalUrl + '#t=' + getStartTimeForPlayback(); // 设置 video 源链接
 					// 清除旧监听器（避免重复绑定）
 					videoElement.onerror = null;
 					document.querySelectorAll('.videoSource').forEach(src => src.onerror = null);
@@ -1921,6 +1939,16 @@
 			}
 
 			// 判断时间是否超过一天
+			async function copyMomentLinkToClipboard() {
+				const id = (currentPlayId || inputVideo.value.trim() || 'Hvfo6PVnB9mnsD').trim();
+				const t = Math.max(0, Math.floor(Number(videoElement.currentTime) || 0));
+				const u = new URL(location.origin + location.pathname);
+				u.searchParams.set('id', id);
+				u.searchParams.set('quality', selectQuality.value);
+				u.searchParams.set('t', String(t));
+				return copyLinkToClipboard(u.href);
+			}
+
 			function isExpired(timestamp) {
 				return Date.now() - timestamp > 24 * 60 * 60 * 1000;
 			}

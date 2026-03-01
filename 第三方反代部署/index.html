@@ -1178,6 +1178,9 @@
 
 					swalAlert('已切换到 ' + selectedValue + ' 服务器播放视频!', 'success', false);
 
+					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
+						return swalAlert('播放链接不符合安全规则，已拦截！');
+					}
 					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					showLoading('正在准备播放器...');
@@ -1414,6 +1417,9 @@
 					const data2 = await res2.json();
 					currentVideoUrl = 'https:' + getVideoUrlByQuality(data2, quality);
 					showLoading('正在准备播放器...');
+					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
+						return swalAlert('播放链接不符合安全规则，已拦截！');
+					}
 					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					// 播放视频
@@ -1470,6 +1476,23 @@
 			function getVideoUrlByQuality(list, quality) {
 				const found = list.find(item => item.name === quality);
 				return (found || list[0]).src.view;
+			}
+
+			function isAllowedViewSourceUrl(rawUrl) {
+				try {
+					const u = new URL(rawUrl);
+					const protocol = String(u.protocol || '').toLowerCase();
+					const host = String(u.hostname || '').toLowerCase();
+					const pathname = String(u.pathname || '');
+					const query = String(u.search || '');
+					const protocolOk = protocol === 'http:' || protocol === 'https:';
+					const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(host);
+					const pathOk = pathname === '/view';
+					const queryOk = query.length > 1;
+					return protocolOk && hostOk && pathOk && queryOk;
+				} catch {
+					return false;
+				}
 			}
 
 			// 显示随机热门选择

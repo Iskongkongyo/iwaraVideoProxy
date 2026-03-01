@@ -9,6 +9,7 @@ import { promisify } from "util";
 const pipe = promisify(pipeline);
 const app = express();
 
+// 如果你设置了默认Iwara账号的Token，那么我强烈建议你设置访问的用户名和密码进一步保证你的账号隐私安全（虽然项目有做保护）！！！
 const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || ""; // 设置访问的用户名
 const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS || ""; // 设置访问的密码
 const IWARA_AUTHORIZATION = process.env.IWARA_AUTHORIZATION || ""; // 设置默认使用Iwara账号的Token
@@ -21,6 +22,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requireBasicAuth);
+
+app.use((req, res, next) => {
+  const p = String(req.path || '');
+  const isProxyPath = p.startsWith('/video/') || p === '/videos' || p.startsWith('/file/') || p === '/view';
+  if (!isProxyPath) return next();
+
+  const method = String(req.method || '').toUpperCase();
+  if (method === 'OPTIONS') {
+    res.setHeader('Allow', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    return res.status(204).end();
+  }
+  if (method !== 'GET') {
+    return res.status(403).json({ error: '仅允许代理GET和OPTIONS请求' });
+  }
+  return next();
+});
 
 
 function safeEquals(a = "", b = "") {
@@ -144,17 +162,22 @@ function filterHeaders(req) {
 // ---------------------------------------------------
 // 判断反代域名是否为iwara
 // ---------------------------------------------------
-function isIwaraUrl(encodedUrl) {
+function isAllowedViewUrl(encodedUrl) {
   try {
-    const decoded = decodeURIComponent(encodedUrl); // 解码
-    const urlObj = new URL(decoded);// 解析 URL
-    return (
-      (urlObj.protocol === "http:" || urlObj.protocol === "https:") &&
-      urlObj.hostname.endsWith(".iwara.tv")
-    );
+    const decoded = decodeURIComponent(encodedUrl);
+    const urlObj = new URL(decoded);
+    const protocolOk = urlObj.protocol === "http:" || urlObj.protocol === "https:";
+    const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(String(urlObj.hostname || ""));
+    const pathOk = urlObj.pathname === "/view";
+    const queryOk = typeof urlObj.search === "string" && urlObj.search.length > 1;
+    return protocolOk && hostOk && pathOk && queryOk;
   } catch (e) {
-    return false; // 如果不是合法 URL
+    return false;
   }
+}
+
+function isIwaraUrl(encodedUrl) {
+  return isAllowedViewUrl(encodedUrl);
 }
 
 // ---------------------------------------------------
@@ -208,9 +231,9 @@ app.use("/file", async (req, res) => {
 app.get("/view", async (req, res) => {
   try {
     const finUrl = req.query.url;
-    if (!finUrl) return res.status(400).json({ error: "缺少url参数值" });
+    if (!finUrl) return res.status(400).json({ error: "请勿滥用接口" });
 
-    if (!isIwaraUrl(finUrl)) return res.status(403).json({ error: "禁止滥用反代其他域名！"  });
+    if (!isAllowedViewUrl(finUrl)) return res.status(403).json({ error: "请勿滥用接口" });
 
     const headers = {};
     if (req.headers.range) headers.Range = req.headers.range;

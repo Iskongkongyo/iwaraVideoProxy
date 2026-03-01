@@ -1178,6 +1178,9 @@ const html = `
 
 					swalAlert('已切换到 ' + selectedValue + ' 服务器播放视频!', 'success', false);
 
+					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
+						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
+					}
 					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					showLoading('正在准备播放器...');
@@ -1414,6 +1417,9 @@ const html = `
 					const data2 = await res2.json();
 					currentVideoUrl = 'https:' + getVideoUrlByQuality(data2, quality);
 					showLoading('正在准备播放器...');
+					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
+						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
+					}
 					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					// 播放视频
@@ -1473,7 +1479,24 @@ const html = `
 			}
 
 			// 显示随机热门选择
-			function showRandomHotPrompt() {
+						function isAllowedViewSourceUrl(rawUrl) {
+				try {
+					const u = new URL(rawUrl);
+					const protocol = String(u.protocol || '').toLowerCase();
+					const host = String(u.hostname || '').toLowerCase();
+					const pathname = String(u.pathname || '');
+					const query = String(u.search || '');
+					const protocolOk = protocol === 'http:' || protocol === 'https:';
+					const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(host);
+					const pathOk = pathname === '/view';
+					const queryOk = query.length > 1;
+					return protocolOk && hostOk && pathOk && queryOk;
+				} catch {
+					return false;
+				}
+			}
+
+                      function showRandomHotPrompt() {
 				swal({
 					text: '随机热门视频分为普通和 R18 内容，您要随机播放哪种内容？',
 					icon: 'info',
@@ -1963,6 +1986,7 @@ const html = `
 </html>`
 
 // 建议这些变量在Cloudflare Worker的面板(优先级更高)里设置，这里设置也行
+// 如果你设置了默认Iwara账号的Token，那么我强烈建议你设置访问的用户名和密码进一步保证你的账号隐私安全（虽然项目有做保护）！！！
 const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
 const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
 const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
@@ -2077,12 +2101,52 @@ function getBackendTokenStatus(env) {
 	const now = Math.floor(Date.now() / 1000);
 	return payload.exp > now ? { status: 'valid' } : { status: 'expired' };
 }
+
+function isAllowedIwaraViewTarget(urlObj) {
+	const protocol = String(urlObj.protocol || '').toLowerCase();
+	const host = String(urlObj.hostname || '').toLowerCase();
+	const pathname = String(urlObj.pathname || '');
+	const query = String(urlObj.search || '');
+	const protocolOk = protocol === 'http:' || protocol === 'https:';
+	const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(host);
+	const pathOk = pathname === '/view';
+	const queryOk = query.length > 1;
+	return protocolOk && hostOk && pathOk && queryOk;
+}
+
+
+function isAllowedProxyMethod(method) {
+	const mth = String(method || '').toUpperCase();
+	return mth === 'GET' || mth === 'OPTIONS';
+}
+
+function isProxyPath(pathname) {
+	return pathname.startsWith('/video/') || pathname.startsWith('/videos') || pathname.startsWith('/file/') || pathname.startsWith('/view');
+}
 export default {
 	async fetch(request, env) {
 		const authFailed = verifyBasicAuth(request, env);
 		if (authFailed) return authFailed;
 
 		let url = new URL(request.url);
+		if (isProxyPath(url.pathname) && !isAllowedProxyMethod(request.method)) {
+			return new Response(JSON.stringify({ error: '仅允许代理GET和OPTIONS请求' }), {
+				status: 403,
+				headers: { 'content-type': 'application/json;charset=UTF-8', 'allow': 'GET, OPTIONS' }
+			});
+		}
+		if (isProxyPath(url.pathname) && String(request.method || '').toUpperCase() === 'OPTIONS') {
+			return new Response(null, {
+				status: 204,
+				headers: {
+					'allow': 'GET, OPTIONS',
+					'access-control-allow-methods': 'GET, OPTIONS',
+					'access-control-allow-origin': '*',
+					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Range'
+				}
+			});
+		}
+
 		if (url.pathname === '/token-status') {
 			const status = getBackendTokenStatus(env);
 			if (status.status === 'not_configured') {
@@ -2136,9 +2200,8 @@ export default {
 				});
 			}
 
-			const isIwaraUrl = (urlObj.protocol === "http:" || urlObj.protocol === "https:") && urlObj.hostname.endsWith(".iwara.tv");
-			if (!isIwaraUrl) {
-				return new Response('{"error":"禁止滥用反代其他域名！"}', {
+			if (!isAllowedIwaraViewTarget(urlObj)) {
+				return new Response('{"error":"请勿滥用接口"}', {
 					status: 403,
 					headers: { "content-type": "application/json;charset=UTF-8" },
 				});

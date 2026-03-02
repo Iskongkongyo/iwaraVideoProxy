@@ -607,6 +607,39 @@ const html = `
 			}
 		}
 
+	
+		.clipboard-soft-tip {
+			position: fixed;
+			left: 50%;
+			bottom: calc(env(safe-area-inset-bottom, 0) + 96px);
+			transform: translate(-50%, 16px);
+			max-width: min(92vw, 620px);
+			padding: 10px 14px;
+			border-radius: 10px;
+			background: rgba(20, 20, 20, 0.92);
+			color: #ffffff;
+			font-size: 13px;
+			line-height: 1.4;
+			text-align: center;
+			box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+			opacity: 0;
+			pointer-events: none;
+			z-index: 3000;
+			transition: opacity 0.18s ease, transform 0.18s ease;
+		}
+
+		.clipboard-soft-tip.show {
+			opacity: 1;
+			transform: translate(-50%, 0);
+		}
+
+		@media (max-width: 768px) {
+			.clipboard-soft-tip {
+				bottom: calc(env(safe-area-inset-bottom, 0) + 84px);
+				font-size: 12px;
+				padding: 9px 12px;
+			}
+		}
 	</style>
 </head>
 
@@ -831,13 +864,36 @@ const html = `
 			let clipboardGestureAttempted = false;
 			let clipboardPromptHandled = false;
 			const CLIPBOARD_HINT_ONCE_KEY = 'clipboard_hint_once_shown_v1';
+			const CLIPBOARD_TAP_HINT_ONCE_KEY = 'clipboard_tap_hint_once_shown_v1';
+			const CLIPBOARD_DEBUG_ENABLED = new URLSearchParams(location.search).get('clipdebug') === '1' || localStorage.getItem('clipboard_debug_v1') === '1';
+			function clipboardLog(){
+				if (!CLIPBOARD_DEBUG_ENABLED) return;
+				try { console.log.apply(console, ['[clipboard]'].concat(Array.from(arguments))); } catch (_) {}
+			}
 
 			function showClipboardRestrictionHintOnce() {
-				if (localStorage.getItem(CLIPBOARD_HINT_ONCE_KEY)) return;
-				localStorage.setItem(CLIPBOARD_HINT_ONCE_KEY, '1');
-				setTimeout(() => {
-					swalAlert('当前浏览器限制自动读取剪切板，请在输入框中手动粘贴链接。', 'info', '知道了');
-				}, 0);
+				if (localStorage.getItem(CLIPBOARD_TAP_HINT_ONCE_KEY)) return;
+				localStorage.setItem(CLIPBOARD_TAP_HINT_ONCE_KEY, '1');
+				showClipboardSoftTip('浏览器限制自动读取剪切板，请点击页面任意位置后自动重试。');
+			}
+
+			function showClipboardSoftTip(message) {
+				if (!message) return;
+				let tip = document.getElementById('clipboardSoftTip');
+				if (!tip) {
+					tip = document.createElement('div');
+					tip.id = 'clipboardSoftTip';
+					tip.className = 'clipboard-soft-tip';
+					document.body.appendChild(tip);
+				}
+				tip.textContent = message;
+				tip.classList.remove('show');
+				void tip.offsetWidth;
+				tip.classList.add('show');
+				clearTimeout(showClipboardSoftTip._timer);
+				showClipboardSoftTip._timer = setTimeout(() => {
+					tip.classList.remove('show');
+				}, 2600);
 			}
 
 			function extractIwaraVideoInfoFromText(text) {
@@ -914,34 +970,70 @@ const html = `
 				playVideoById();
 			}
 
-			async function autoPlayClipboardIwaraLink(fromUserGesture = false) {
+			async function autoPlayClipboardIwaraLink(fromUserGesture = false, forceAutoRetry = false) {
+				clipboardLog('autoPlay start', 'fromUserGesture=', fromUserGesture, 'force=', forceAutoRetry, 'handled=', clipboardPromptHandled);
 				if (clipboardPromptHandled) return;
 				if (fromUserGesture) {
 					if (clipboardGestureAttempted) return;
 					clipboardGestureAttempted = true;
 				} else {
-					if (clipboardAutoAttempted) return;
+					if (clipboardAutoAttempted && !forceAutoRetry) return;
 					clipboardAutoAttempted = true;
 				}
 
 				try {
 					if (!window.isSecureContext || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
+						clipboardLog('clipboard api unavailable', 'secure=', window.isSecureContext, 'hasClipboard=', !!navigator.clipboard);
 						return;
 					}
 					const clipboardText = String(await navigator.clipboard.readText() || '').trim();
+					clipboardLog('readText ok, length=', clipboardText.length);
 					const info = extractIwaraVideoInfoFromText(clipboardText);
-					if (!info) return;
+					if (!info) {
+						clipboardLog('not iwara link');
+						return;
+					}
 					await promptPlayDetectedIwaraLink(info);
-				} catch (_) {
-					if (!fromUserGesture && !clipboardPromptHandled) {
+				} catch (err) {
+					clipboardLog('readText failed', err && (err.name + ': ' + err.message));
+					const errName = String(err && err.name || '').toLowerCase();
+					const errMsg = String(err && err.message || '').toLowerCase();
+					const autoReadDenied = !fromUserGesture && (
+						errName === 'notallowederror' ||
+						errMsg.indexOf('not focused') >= 0 ||
+						errMsg.indexOf('permission') >= 0 ||
+						errMsg.indexOf('denied') >= 0
+					);
+					if (autoReadDenied && !clipboardPromptHandled) {
 						showClipboardRestrictionHintOnce();
 					}
 				}
 			}
 
+			let lastClipboardEntryCheckAt = 0;
+			let clipboardGestureProbeActive = false;
+
+			function triggerClipboardCheckOnEntry(_reason = 'entry') {
+				clipboardLog('entry trigger', _reason, 'visibility=', document.visibilityState);
+				const now = Date.now();
+				if (now - lastClipboardEntryCheckAt < 1200) {
+					clipboardLog('skip by throttle');
+					return;
+				}
+				lastClipboardEntryCheckAt = now;
+				clipboardAutoAttempted = false;
+				clipboardGestureAttempted = false;
+				clipboardPromptHandled = false;
+				autoPlayClipboardIwaraLink(false, true);
+				bindClipboardGestureProbe();
+			}
 			function bindClipboardGestureProbe() {
-				document.addEventListener('click', function onFirstClick() {
-					document.removeEventListener('click', onFirstClick);
+				if (clipboardGestureProbeActive) return;
+				clipboardGestureProbeActive = true;
+				document.addEventListener('click', function onGestureClick() {
+					document.removeEventListener('click', onGestureClick);
+					clipboardGestureProbeActive = false;
+					clipboardLog('gesture click retry');
 					autoPlayClipboardIwaraLink(true);
 				});
 			}
@@ -969,14 +1061,28 @@ const html = `
 					playVideoById();
 				} else {
 					setTimeout(() => {
-						autoPlayClipboardIwaraLink(false);
+						triggerClipboardCheckOnEntry('initial-load');
 						bindClipboardGestureProbe();
 						bindClipboardFallbackEvents();
-					}, 1800);
+					}, 300);
 				}
 			});
 
-			function parseStartTimeSec(rawValue) {
+			window.addEventListener('pageshow', (evt) => {
+				if (evt && evt.persisted) {
+					triggerClipboardCheckOnEntry('pageshow-bfcache');
+				}
+			});
+
+			document.addEventListener('visibilitychange', () => {
+				if (document.visibilityState === 'visible') {
+					triggerClipboardCheckOnEntry('visible');
+				}
+			});
+
+			window.addEventListener('focus', () => {
+				triggerClipboardCheckOnEntry('focus');
+			});			function parseStartTimeSec(rawValue) {
 				const sec = Number.parseInt(rawValue, 10);
 				return Number.isFinite(sec) && sec > 0 ? sec : 0;
 			}
@@ -2215,3 +2321,4 @@ export default {
 	}
 
 };
+

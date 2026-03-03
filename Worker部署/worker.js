@@ -747,7 +747,7 @@ const html = `
 			<div class="link-area">
 				<div class="input-row">
 					<div class="input-with-site">
-						<input id="video" class="form" type="text" placeholder="填写视频ID或粘贴视频链接" />
+						<input id="video" class="form" type="text" placeholder="填视频ID或链接"/>
 						<select id="site">
 							<option value="tv" selected>TV站</option>
 							<option value="ai">AI站</option>
@@ -1411,7 +1411,7 @@ const html = `
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl) + '&site=' + encodeURIComponent(getCurrentSiteType());
+					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					showLoading('正在准备播放器...');
 
@@ -1489,7 +1489,7 @@ const html = `
 					const data = await fetchJson('/video/' + id, {
 						headers: {
 							CustomizedToken: localStorage.getItem('token') ? 'Bearer ' + localStorage.getItem('token') : '',
-							'Site-Type': getCurrentSiteType()
+							'X-Site': getCurrentSiteHost()
 						}
 					});
 
@@ -1639,8 +1639,7 @@ const html = `
 						'&download=' + encodeURIComponent('Iwara - ' + data.title + ' [' + data.id + '].' + data
 							.file.mime.replace('video/', '')), {
 						headers: {
-							'X-Version': hashHex,
-							'Site-Type': getCurrentSiteType()
+							'X-Version': hashHex
 						}
 					});
 					if (!res2.ok) {
@@ -1652,7 +1651,7 @@ const html = `
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl) + '&site=' + encodeURIComponent(getCurrentSiteType());
+					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					// 播放视频
 					videoElement.pause();
@@ -1762,7 +1761,7 @@ const html = `
 						showLoading('正在获取热门视频列表...');
 						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=24", {
 							headers: {
-								'Site-Type': getCurrentSiteType()
+								'X-Site': getCurrentSiteHost()
 							}
 						})
 							.then(data => {
@@ -2307,18 +2306,7 @@ function resolveUpstreamAuthorization(request, env) {
 	return normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
 }
 
-function normalizeSiteTypeFromRequest(request, fallback = 'tv') {
-	const normalize = (v) => {
-		const s = String(v || '').trim().toLowerCase();
-		if (s === 'ai' || s === 'www.iwara.ai') return 'ai';
-		return 'tv';
-	};
-	const byHeader = request.headers.get('Site-Type') || request.headers.get('site-type') || '';
-	if (String(byHeader || '').trim()) return normalize(byHeader);
-	return normalize(fallback);
-}
-
-function buildProxyRequest(targetUrl, request, env, siteType = 'tv', setOriginReferer = true) {
+function buildProxyRequest(targetUrl, request, env) {
 	const headers = new Headers(request.headers);
 
 	// Never forward local Basic Auth credentials to upstream.
@@ -2329,24 +2317,11 @@ function buildProxyRequest(targetUrl, request, env, siteType = 'tv', setOriginRe
 	const customizedToken = (headers.get('CustomizedToken') || headers.get('customizedtoken') || '').trim();
 	headers.delete('CustomizedToken');
 	headers.delete('customizedtoken');
-	headers.delete('Site-Type');
-	headers.delete('site-type');
 
 	const cfg = workerConfig(env);
 	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || (cfg.iwaraAuthorization || '').trim());
 	if (upstreamAuthorization) {
 		headers.set('Authorization', upstreamAuthorization);
-	}
-	if (setOriginReferer) {
-		const normalizedSiteType = normalizeSiteTypeFromRequest(request, siteType);
-		const upstreamHost = normalizedSiteType === 'ai' ? 'www.iwara.ai' : 'www.iwara.tv';
-		headers.set('Origin', 'https://' + upstreamHost);
-		headers.set('Referer', 'https://' + upstreamHost + '/');
-	} else {
-		headers.delete('Origin');
-		headers.delete('origin');
-		headers.delete('Referer');
-		headers.delete('referer');
 	}
 
 	return new Request(targetUrl, {
@@ -2423,7 +2398,7 @@ export default {
 					'allow': 'GET, OPTIONS',
 					'access-control-allow-methods': 'GET, OPTIONS',
 					'access-control-allow-origin': '*',
-					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Site-Type, Range'
+					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Range'
 				}
 			});
 		}
@@ -2450,16 +2425,9 @@ export default {
 				},
 			});
 		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
-			const siteType = normalizeSiteTypeFromRequest(request, url.searchParams.get('site') || url.searchParams.get('type') || 'tv');
 			url.hostname = 'apiq.iwara.tv';
-			let res = await fetch(buildProxyRequest(url.toString(), request, env, siteType, true));
-			// Fallback: some upstream routes may return 404 when Origin/Referer is enforced.
-			if (res.status === 404) {
-				res = await fetch(buildProxyRequest(url.toString(), request, env, siteType, false));
-			}
-			return res;
+			return fetch(buildProxyRequest(url.toString(), request, env));
 		} else if (url.pathname.startsWith('/view')) {
-			const siteType = normalizeSiteTypeFromRequest(request, url.searchParams.get('site') || url.searchParams.get('type') || 'tv');
 			let finUrl = url.searchParams.get('url');
 			if (!finUrl) {
 				return new Response('{"error":"缺少url参数值"}', {
@@ -2494,11 +2462,10 @@ export default {
 					headers: { "content-type": "application/json;charset=UTF-8" },
 				});
 			}
-			return fetch(buildProxyRequest(decoded, request, env, siteType));
+			return fetch(buildProxyRequest(decoded, request, env));
 		} else if (url.pathname.startsWith('/file/')) {
-			const siteType = normalizeSiteTypeFromRequest(request, url.searchParams.get('site') || url.searchParams.get('type') || 'tv');
 			url.hostname = 'filesq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env, siteType));
+			return fetch(buildProxyRequest(url.toString(), request, env));
 		}
 		return env.ASSETS.fetch(request);
 	}

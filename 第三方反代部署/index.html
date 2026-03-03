@@ -746,7 +746,7 @@
 			<div class="link-area">
 				<div class="input-row">
 					<div class="input-with-site">
-						<input id="video" class="form" type="text" placeholder="填写视频ID或粘贴视频链接" />
+						<input id="video" class="form" type="text" placeholder="填视频ID或链接"/>
 						<select id="site">
 							<option value="tv" selected>TV站</option>
 							<option value="ai">AI站</option>
@@ -1410,7 +1410,7 @@
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl) + '&site=' + encodeURIComponent(getCurrentSiteType());
+					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					showLoading('正在准备播放器...');
 
@@ -1488,7 +1488,7 @@
 					const data = await fetchJson('/video/' + id, {
 						headers: {
 							CustomizedToken: localStorage.getItem('token') ? 'Bearer ' + localStorage.getItem('token') : '',
-							'Site-Type': getCurrentSiteType()
+							'X-Site': getCurrentSiteHost()
 						}
 					});
 
@@ -1638,8 +1638,7 @@
 						'&download=' + encodeURIComponent('Iwara - ' + data.title + ' [' + data.id + '].' + data
 							.file.mime.replace('video/', '')), {
 						headers: {
-							'X-Version': hashHex,
-							'Site-Type': getCurrentSiteType()
+							'X-Version': hashHex
 						}
 					});
 					if (!res2.ok) {
@@ -1651,7 +1650,7 @@
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl) + '&site=' + encodeURIComponent(getCurrentSiteType());
+					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
 					// 播放视频
 					videoElement.pause();
@@ -1761,7 +1760,7 @@
 						showLoading('正在获取热门视频列表...');
 						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=24", {
 							headers: {
-								'Site-Type': getCurrentSiteType()
+								'X-Site': getCurrentSiteHost()
 							}
 						})
 							.then(data => {

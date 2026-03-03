@@ -32,6 +32,7 @@ app.use((req, res, next) => {
   if (method === 'OPTIONS') {
     res.setHeader('Allow', 'GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, CustomizedToken, X-Version, X-Site, Range');
     return res.status(204).end();
   }
   if (method !== 'GET') {

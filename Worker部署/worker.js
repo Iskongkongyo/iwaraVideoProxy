@@ -170,6 +170,14 @@ const html = `
 			opacity: 1;
 		}
 
+		.input-row {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			flex-wrap: nowrap;
+			flex: 0 0 auto;
+		}
+
 		.link-area input.form {
 			width: 250px;
 			height: 45px;
@@ -191,6 +199,29 @@ const html = `
 			border-color: #ff4665;
 			background: rgba(0, 0, 0, 0.1);
 			box-shadow: 0 0 15px rgba(255, 70, 101, 0.3);
+		}
+
+		.input-with-site {
+			position: relative;
+			width: 250px;
+		}
+
+		.input-with-site input.form {
+			width: 100%;
+			padding-right: 86px;
+		}
+
+		.input-with-site #site {
+			position: absolute;
+			right: 6px;
+			top: 50%;
+			transform: translateY(-50%);
+			width: 74px;
+			height: 33px;
+			padding: 0 6px;
+			font-size: 13px;
+			z-index: 2;
+			background: rgba(0, 0, 0, 0.05);
 		}
 
 		.link-area select {
@@ -281,22 +312,26 @@ const html = `
 			}
 
 			.input-row {
-				display: flex;
-				width: 100%;
+				width: 97%;
 				justify-content: center;
 				gap: 10px;
 			}
 
-			.input-row input {
+			.input-row .input-with-site {
 				width: 60%;
 			}
 
-			.input-row select {
-				width: 35%;
+			.input-row > select {
+				width: 25%;
+			}
+
+			.input-row .input-with-site #site {
+				width: 68px;
+				font-size: 12px;
 			}
 
 			.link-area .btn {
-				width: 100%;
+				width: 85%;
 				margin: 0;
 			}
 
@@ -325,7 +360,7 @@ const html = `
 		}
 
 		.page-btn {
-			padding: 6px 6px;
+			padding: 4px 2px;
 			background: linear-gradient(135deg, #ff4665 0%, #ff1c41 100%);
 			color: white;
 			border: none;
@@ -695,7 +730,7 @@ const html = `
 				<div>
 					<button id="firstPage" class="page-btn">首页</button>
 					<button id="prevPage" class="page-btn">上一页</button>
-					<span id="pageInfo" style="margin: 0 10px;">第 1 页 / 共 1 页</span>
+					<span id="pageInfo" style="margin: 0 5px;">第 1 页 / 共 1 页</span>
 					<button id="nextPage" class="page-btn">下一页</button>
 					<button id="lastPage" class="page-btn">末页</button>
 				</div>
@@ -711,7 +746,13 @@ const html = `
 			</div>
 			<div class="link-area">
 				<div class="input-row">
-					<input id="video" class="form" type="text" placeholder="填写视频ID或粘贴视频链接" />
+					<div class="input-with-site">
+						<input id="video" class="form" type="text" placeholder="填写视频ID或粘贴视频链接" />
+						<select id="site">
+							<option value="tv" selected>TV站</option>
+							<option value="ai">AI站</option>
+						</select>
+					</div>
 					<select id="quality">
 						<option value="Source">原视频</option>
 						<option value="360">360P</option>
@@ -741,6 +782,7 @@ const html = `
 			const btnCloseOverlay = q('#closeButton');
 			const inputVideo = q('#video');
 			const selectQuality = q('#quality');
+			const selectSite = q('#site');
 			const btnSubmit = q('#submit');
 			const btnHot = q('#hot');
 			const btnOpenSave = q('#save');
@@ -812,6 +854,77 @@ const html = `
 					tagHits
 				};
 			}
+			function normalizeSiteType(rawType) {
+				return String(rawType || '').toLowerCase() === 'ai' ? 'ai' : 'tv';
+			}
+
+			function getCurrentSiteType() {
+				return normalizeSiteType(selectSite && selectSite.value);
+			}
+
+			function getCurrentSiteHost() {
+				return getCurrentSiteType() === 'ai' ? 'www.iwara.ai' : 'www.iwara.tv';
+			}
+
+			function applySiteType(siteType) {
+				if (!selectSite) return;
+				selectSite.value = normalizeSiteType(siteType);
+			}
+
+			function getSiteStoragePrefix() {
+				return getCurrentSiteType() === 'ai' ? 'ai_' : 'tv_';
+			}
+
+			function getSiteHostByType(siteType) {
+				return normalizeSiteType(siteType) === 'ai' ? 'www.iwara.ai' : 'www.iwara.tv';
+			}
+
+			function normalizeFavoriteEntry(entry) {
+				if (typeof entry === 'string') {
+					return { name: entry, type: 'tv' };
+				}
+				if (Array.isArray(entry)) {
+					return {
+						name: String(entry[0] || ''),
+						type: normalizeSiteType(entry[1])
+					};
+				}
+				if (entry && typeof entry === 'object') {
+					return {
+						name: String(entry.name || ''),
+						type: normalizeSiteType(entry.type)
+					};
+				}
+				return null;
+			}
+
+			function normalizeFavoritesData(raw) {
+				const source = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+				const out = {};
+				for (const [id, entry] of Object.entries(source)) {
+					const normalized = normalizeFavoriteEntry(entry);
+					if (!normalized) continue;
+					if (!normalized.name) continue;
+					out[id] = normalized;
+				}
+				return out;
+			}
+
+			function loadAndUpgradeFavorites() {
+				const raw = localStorage.getItem('save');
+				if (!raw) return {};
+				try {
+					const parsed = JSON.parse(raw);
+					const normalized = normalizeFavoritesData(parsed);
+					if (JSON.stringify(parsed) !== JSON.stringify(normalized)) {
+						localStorage.setItem('save', JSON.stringify(normalized));
+					}
+					return normalized;
+				} catch {
+					localStorage.setItem('save', JSON.stringify({}));
+					return {};
+				}
+			}
 			const fetchJson = async (url, options = {}) => {
 				const res = await fetch(url, options);
 				const data = await res.json();
@@ -824,6 +937,7 @@ const html = `
 				}
 				return data;
 			};
+			loadAndUpgradeFavorites();
 
 			// 弹窗提示用户遵守法规
 			// 判断是否应该显示提示（24小时内不重复提示）
@@ -850,7 +964,8 @@ const html = `
 					videoElement.pause();
 					if (goToIwara) {
 						const shareId = new URL(location.href).searchParams.get('id');
-						location.replace(shareId ? 'https://www.iwara.tv/video/' + shareId : 'https://www.iwara.tv');
+						const siteHost = getCurrentSiteHost();
+						location.replace(shareId ? ('https://' + siteHost + '/video/' + shareId) : ('https://' + siteHost));
 					} else {
 						// 用户选择暂不跳转，记录当前时间戳
 						localStorage.setItem('promptLastDismissed', Date.now().toString());
@@ -908,12 +1023,15 @@ const html = `
 				const protocol = String(parsedUrl.protocol || '').toLowerCase();
 				if (protocol !== 'http:' && protocol !== 'https:') return null;
 				const hostname = String(parsedUrl.hostname || '').toLowerCase();
-				if (!(hostname === 'iwara.tv' || hostname.endsWith('.iwara.tv'))) return null;
+				let siteType = null;
+				if (hostname === 'www.iwara.tv') siteType = 'tv';
+				if (hostname === 'www.iwara.ai') siteType = 'ai';
+				if (!siteType) return null;
 				const parts = String(parsedUrl.pathname || '').split('/').filter(Boolean);
 				if (parts.length < 2 || parts[0].toLowerCase() !== 'video') return null;
 				const id = parts[1];
 				if (!/^[0-9A-Za-z]{9,}$/.test(id)) return null;
-				return { id, url: parsedUrl.toString() };
+				return { id, url: parsedUrl.toString(), type: siteType };
 			}
 
 
@@ -966,6 +1084,7 @@ const html = `
 				const selectedQuality = await promptQualityBeforePlay();
 				if (!selectedQuality) return;
 				selectQuality.value = selectedQuality;
+				applySiteType(info.type);
 				inputVideo.value = info.id;
 				playVideoById();
 			}
@@ -1053,7 +1172,9 @@ const html = `
 
 				const idParam = new URLSearchParams(location.search).get('id');
 				const qualityParam = new URLSearchParams(location.search).get('quality');
+				const typeParam = new URLSearchParams(location.search).get('type');
 				const tParam = new URLSearchParams(location.search).get('t');
+				applySiteType(typeParam);
 				if (idParam) {
 					inputVideo.value = idParam;
 					selectQuality.value = qualityParam || selectQuality.value;
@@ -1203,9 +1324,12 @@ const html = `
 			// 输入框 URL 转 ID 解析
 			inputVideo.addEventListener('input', () => {
 				const url = inputVideo.value;
-				if (url.startsWith('https://www.iwara.tv/video/')) {
-					const newId = url.replace('https://www.iwara.tv/video/', '').split('/')[0];
+				if (url.startsWith('https://www.iwara.tv/video/') || url.startsWith('https://www.iwara.ai/video/')) {
+					const info = extractIwaraVideoInfoFromText(url);
+					if (!info) return;
+					const newId = info.id;
 					setTimeout(() => {
+						applySiteType(info.type);
 						inputVideo.value = newId;
 					}, 200);
 				}
@@ -1287,7 +1411,7 @@ const html = `
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
+					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl) + '&site=' + encodeURIComponent(getCurrentSiteType());
 
 					showLoading('正在准备播放器...');
 
@@ -1304,8 +1428,8 @@ const html = `
 
 			// 收藏按钮（覆盖当前视频）
 			btnSaveOverlay.addEventListener('click', () => {
-				let data = JSON.parse(localStorage.getItem('save') || '{}');
-				data[currentPlayId] = currentVideoName;
+				let data = loadAndUpgradeFavorites();
+				data[currentPlayId] = { name: currentVideoName, type: getCurrentSiteType() };
 				localStorage.setItem('save', JSON.stringify(data));
 				swalAlert('收藏成功！', 'success', false);
 			});
@@ -1364,7 +1488,8 @@ const html = `
 				try {
 					const data = await fetchJson('/video/' + id, {
 						headers: {
-							CustomizedToken: localStorage.getItem('token') ? 'Bearer ' + localStorage.getItem('token') : ''
+							CustomizedToken: localStorage.getItem('token') ? 'Bearer ' + localStorage.getItem('token') : '',
+							'Site-Type': getCurrentSiteType()
 						}
 					});
 
@@ -1514,7 +1639,8 @@ const html = `
 						'&download=' + encodeURIComponent('Iwara - ' + data.title + ' [' + data.id + '].' + data
 							.file.mime.replace('video/', '')), {
 						headers: {
-							'X-Version': hashHex
+							'X-Version': hashHex,
+							'Site-Type': getCurrentSiteType()
 						}
 					});
 					if (!res2.ok) {
@@ -1526,7 +1652,7 @@ const html = `
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
+					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl) + '&site=' + encodeURIComponent(getCurrentSiteType());
 
 					// 播放视频
 					videoElement.pause();
@@ -1622,8 +1748,9 @@ const html = `
 					}
 				}).then(choice => {
 					if (!choice) return;
-					let keyInfo = choice === 'R18' ? 'hots' : 'generalHots';
-					let keyTs = choice === 'R18' ? 'ts' : 'generalTs';
+					const sitePrefix = getSiteStoragePrefix();
+					let keyInfo = choice === 'R18' ? (sitePrefix + 'hots') : (sitePrefix + 'generalHots');
+					let keyTs = choice === 'R18' ? (sitePrefix + 'ts') : (sitePrefix + 'generalTs');
 					let rating = choice === 'R18' ? 'ecchi' : 'general';
 					const cache = localStorage.getItem(keyInfo);
 					const timestamp = parseInt(localStorage.getItem(keyTs) || '0');
@@ -1633,7 +1760,11 @@ const html = `
 						playVideoById();
 					} else {
 						showLoading('正在获取热门视频列表...');
-						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=24")
+						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=24", {
+							headers: {
+								'Site-Type': getCurrentSiteType()
+							}
+						})
 							.then(data => {
 								const results = data.results || [];
 								localStorage.setItem(keyInfo, JSON.stringify(results));
@@ -1651,7 +1782,7 @@ const html = `
 
 			// 打开收藏列表（使用 template 克隆，不再移除原 DOM）
 			function openFavorites() {
-				const data = JSON.parse(localStorage.getItem('save') || '{}');
+				const data = loadAndUpgradeFavorites();
 				const entries = Object.entries(data);
 				const reversedEntries = entries.reverse();
 				const reversedData = Object.fromEntries(reversedEntries);
@@ -1689,12 +1820,15 @@ const html = `
 					const endIndex = Math.min(startIndex + pageSize, dataArray.length);
 					const cur = dataArray.slice(startIndex, endIndex);
 
-					cur.forEach(([id, name]) => {
+					cur.forEach(([id, item]) => {
 						const tr = document.createElement('tr');
+						const itemName = String(item && item.name || '');
+						const itemType = normalizeSiteType(item && item.type);
 
 						const td1 = document.createElement('td');
-						td1.textContent = name;
+						td1.textContent = itemName + (itemType === 'ai' ? ' [AI]' : ' [TV]');
 						td1.dataset.id = id;
+						td1.dataset.type = itemType;
 
 						const td2 = document.createElement('td');
 
@@ -1715,6 +1849,7 @@ const html = `
 
 						// 点击播放
 						btnPlay.onclick = () => {
+							applySiteType(itemType);
 							inputVideo.value = id;
 							swal.close();
 							playVideoById();
@@ -1722,7 +1857,7 @@ const html = `
 
 						// 点击删除
 						btnDel.onclick = () => {
-							if (confirm('确认删除 ' + name + ' 吗？')) {
+							if (confirm('确认删除 ' + itemName + ' 吗？')) {
 								delete reversedData[id];
 								const entries = Object.entries(reversedData);
 								const reversedEntries = entries.reverse();
@@ -1801,7 +1936,8 @@ const html = `
 					if (tr && !e.target.matches('button')) {
 						const td = tr.querySelector('td');
 						if (td && td.dataset.id) {
-							copyLinkToClipboard('https://www.iwara.tv/video/' + td.dataset.id);
+							const host = getSiteHostByType(td.dataset.type);
+							copyLinkToClipboard('https://' + host + '/video/' + td.dataset.id);
 						}
 					}
 				});
@@ -1967,8 +2103,8 @@ const html = `
 
 			// 导出收藏
 			function exportFavorites() {
-				const data = localStorage.getItem('save');
-				if (data) {
+				const data = JSON.stringify(loadAndUpgradeFavorites());
+				if (data && data !== '{}') {
 					const blob = new Blob([data], {
 						type: 'application/json'
 					});
@@ -2001,7 +2137,18 @@ const html = `
 						const reader = new FileReader();
 						reader.readAsText(input.files[0]);
 						reader.onload = () => {
-							const imported = reader.result;
+							let parsedImported;
+							try {
+								parsedImported = JSON.parse(String(reader.result || '{}'));
+							} catch {
+								swal({
+									text: 'JSON 格式错误，导入失败',
+									icon: 'error'
+								});
+								resolve();
+								return;
+							}
+							const imported = JSON.stringify(normalizeFavoritesData(parsedImported));
 							if (localStorage.getItem('save')) {
 								swal({
 									text: '已有收藏内容，导入将覆盖旧数据，是否继续？',
@@ -2013,11 +2160,13 @@ const html = `
 								}).then(ok => {
 									if (ok) {
 										localStorage.setItem('save', imported);
+										loadAndUpgradeFavorites();
 									}
 									resolve();
 								});
 							} else {
 								localStorage.setItem('save', imported);
+								loadAndUpgradeFavorites();
 								resolve();
 							}
 						};
@@ -2050,6 +2199,7 @@ const html = `
 						const u = new URL(location.origin);
 						u.searchParams.set('id', inputVideo.value.trim() || 'Hvfo6PVnB9mnsD');
 						u.searchParams.set('quality', selectQuality.value);
+						u.searchParams.set('type', getCurrentSiteType());
 						return u.href;
 					})();
 					await navigator.clipboard.writeText(link);
@@ -2074,6 +2224,7 @@ const html = `
 				const u = new URL(location.origin + location.pathname);
 				u.searchParams.set('id', id);
 				u.searchParams.set('quality', selectQuality.value);
+				u.searchParams.set('type', getCurrentSiteType());
 				u.searchParams.set('t', String(t));
 				return copyLinkToClipboard(u.href);
 			}
@@ -2156,7 +2307,18 @@ function resolveUpstreamAuthorization(request, env) {
 	return normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
 }
 
-function buildProxyRequest(targetUrl, request, env) {
+function normalizeSiteTypeFromRequest(request, fallback = 'tv') {
+	const normalize = (v) => {
+		const s = String(v || '').trim().toLowerCase();
+		if (s === 'ai' || s === 'www.iwara.ai') return 'ai';
+		return 'tv';
+	};
+	const byHeader = request.headers.get('Site-Type') || request.headers.get('site-type') || '';
+	if (String(byHeader || '').trim()) return normalize(byHeader);
+	return normalize(fallback);
+}
+
+function buildProxyRequest(targetUrl, request, env, siteType = 'tv', setOriginReferer = true) {
 	const headers = new Headers(request.headers);
 
 	// Never forward local Basic Auth credentials to upstream.
@@ -2167,11 +2329,24 @@ function buildProxyRequest(targetUrl, request, env) {
 	const customizedToken = (headers.get('CustomizedToken') || headers.get('customizedtoken') || '').trim();
 	headers.delete('CustomizedToken');
 	headers.delete('customizedtoken');
+	headers.delete('Site-Type');
+	headers.delete('site-type');
 
 	const cfg = workerConfig(env);
 	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || (cfg.iwaraAuthorization || '').trim());
 	if (upstreamAuthorization) {
 		headers.set('Authorization', upstreamAuthorization);
+	}
+	if (setOriginReferer) {
+		const normalizedSiteType = normalizeSiteTypeFromRequest(request, siteType);
+		const upstreamHost = normalizedSiteType === 'ai' ? 'www.iwara.ai' : 'www.iwara.tv';
+		headers.set('Origin', 'https://' + upstreamHost);
+		headers.set('Referer', 'https://' + upstreamHost + '/');
+	} else {
+		headers.delete('Origin');
+		headers.delete('origin');
+		headers.delete('Referer');
+		headers.delete('referer');
 	}
 
 	return new Request(targetUrl, {
@@ -2248,7 +2423,7 @@ export default {
 					'allow': 'GET, OPTIONS',
 					'access-control-allow-methods': 'GET, OPTIONS',
 					'access-control-allow-origin': '*',
-					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Range'
+					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Site-Type, Range'
 				}
 			});
 		}
@@ -2275,9 +2450,16 @@ export default {
 				},
 			});
 		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
+			const siteType = normalizeSiteTypeFromRequest(request, url.searchParams.get('site') || url.searchParams.get('type') || 'tv');
 			url.hostname = 'apiq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env));
+			let res = await fetch(buildProxyRequest(url.toString(), request, env, siteType, true));
+			// Fallback: some upstream routes may return 404 when Origin/Referer is enforced.
+			if (res.status === 404) {
+				res = await fetch(buildProxyRequest(url.toString(), request, env, siteType, false));
+			}
+			return res;
 		} else if (url.pathname.startsWith('/view')) {
+			const siteType = normalizeSiteTypeFromRequest(request, url.searchParams.get('site') || url.searchParams.get('type') || 'tv');
 			let finUrl = url.searchParams.get('url');
 			if (!finUrl) {
 				return new Response('{"error":"缺少url参数值"}', {
@@ -2312,10 +2494,11 @@ export default {
 					headers: { "content-type": "application/json;charset=UTF-8" },
 				});
 			}
-			return fetch(buildProxyRequest(decoded, request, env));
+			return fetch(buildProxyRequest(decoded, request, env, siteType));
 		} else if (url.pathname.startsWith('/file/')) {
+			const siteType = normalizeSiteTypeFromRequest(request, url.searchParams.get('site') || url.searchParams.get('type') || 'tv');
 			url.hostname = 'filesq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env));
+			return fetch(buildProxyRequest(url.toString(), request, env, siteType));
 		}
 		return env.ASSETS.fetch(request);
 	}

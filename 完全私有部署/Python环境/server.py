@@ -95,7 +95,7 @@ def restrict_proxy_methods():
         resp = Response(status=204)
         resp.headers['Allow'] = 'GET, OPTIONS'
         resp.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
-        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, CustomizedToken, X-Version, Range'
+        resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, CustomizedToken, X-Version, X-Site, Range'
         return resp
 
     if method != 'GET':

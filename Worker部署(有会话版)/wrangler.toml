@@ -1,0 +1,24 @@
+name = "worker服务名" # 这里填写你的worker服务名
+main = "worker.js" # 入口文件
+compatibility_date = "2026-03-08" # 日期
+
+[[durable_objects.bindings]]
+name = "ONLINE_COUNTER"
+class_name = "OnlineCounterDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OnlineCounterDurableObject"]
+
+# 可观测性（可选），可在Cloudflare管理页面查看请求
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# 配置环境变量
+[vars]
+# 想要配置的变量，补充其值然后把其前面的“#“删除
+# BASIC_AUTH_USER = ""  #配置用户名
+# BASIC_AUTH_PASS = "" #配置密码
+# IWARA_AUTHORIZATION = "" #配置后端默认Token

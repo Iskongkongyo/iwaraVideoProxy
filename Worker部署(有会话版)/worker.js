@@ -1,3 +1,4 @@
+const html = `
 <!DOCTYPE html>
 <html lang="zh-CN">
 
@@ -34,6 +35,7 @@
 			color: #333333;
 			padding-bottom: calc(env(safe-area-inset-bottom, 0) + 80px);
 			min-height: 100vh;
+			position: relative;
 			display: flex;
 			flex-direction: column;
 		}
@@ -153,6 +155,72 @@
 			color: #555555;
 			font-size: 18px;
 			font-weight: 300;
+		}
+
+		.presence-panel {
+			position: absolute;
+			top: calc(env(safe-area-inset-top, 0) + 8px);
+			left: calc(env(safe-area-inset-left, 0) + 8px);
+			padding: 8px 12px;
+			display: flex;
+			align-items: center;
+			justify-content: flex-start;
+			gap: 5px;
+			border: none;
+			border-radius: 0;
+			background: transparent;
+			box-shadow: none;
+			color: #444444;
+			z-index: 1200;
+			pointer-events: none;
+		}
+
+		.presence-dot {
+			width: 10px;
+			height: 10px;
+			border-radius: 50%;
+			background: #ffb347;
+			box-shadow: 0 0 0 4px rgba(255, 179, 71, 0.18);
+			transition: background 0.2s ease, box-shadow 0.2s ease;
+			animation: presencePulse 1.8s ease-in-out infinite;
+		}
+
+		.presence-panel[data-state="online"] .presence-dot {
+			background: #3AB54A;
+			box-shadow: 0 0 0 4px rgba(58, 181, 74, 0.16);
+			animation-duration: 1.5s;
+		}
+
+		.presence-panel[data-state="error"] .presence-dot {
+			background: #ff4665;
+			box-shadow: 0 0 0 4px rgba(255, 70, 101, 0.16);
+			animation-duration: 1.2s;
+		}
+
+		@keyframes presencePulse {
+			0%,
+			100% {
+				transform: scale(1);
+				opacity: 0.95;
+			}
+
+			50% {
+				transform: scale(1.28);
+				opacity: 0.55;
+			}
+		}
+
+		.presence-label,
+		.presence-unit {
+			font-size: 14px;
+		}
+
+		.presence-count {
+			font-size: 22px;
+			font-weight: 800;
+			color: #ff4665;
+			min-width: 1ch;
+			margin-right: -1px;
 		}
 
 		.link-area {
@@ -336,6 +404,23 @@
 
 			.title {
 				font-size: 32px;
+			}
+
+			.presence-panel {
+				top: calc(env(safe-area-inset-top, 0) + 6px);
+				left: calc(env(safe-area-inset-left, 0) + 6px);
+				padding: 5px 7px;
+				width: auto;
+				gap: 4px;
+			}
+
+			.presence-count {
+				font-size: 20px;
+			}
+
+			.presence-label,
+			.presence-unit {
+				font-size: 13px;
 			}
 		}
 
@@ -692,6 +777,13 @@
 		</div>
 	</div>
 
+	<div id="onlinePresenceCard" class="presence-panel" data-state="pending" aria-live="polite">
+		<span class="presence-dot" aria-hidden="true"></span>
+		<span class="presence-label">全站在线</span>
+		<strong id="onlineCountValue" class="presence-count">--</strong>
+		<span class="presence-unit">会话</span>
+	</div>
+
 	<div id="iframeContainer">
 		<div id="playerActions">
 		<button id="changeButton">切换播放源</button>
@@ -794,11 +886,24 @@
 			const btnShare = q('#share');
 			const btnToken = q('#token');
 			const saveContainer = q('#saveVideos');
+			const onlinePresenceCard = q('#onlinePresenceCard');
+			const onlineCountValue = q('#onlineCountValue');
 
 			let currentPlayId = '',
 				currentVideoName = '',
 				currentVideoUrl = '',
 				pendingStartTimeSec = 0;
+			const ONLINE_SESSION_STORAGE_KEY = 'iwara_site_presence_session_v1';
+			const ONLINE_WS_PATH = '/online-presence';
+			const ONLINE_RECONNECT_MIN_DELAY_MS = 1500;
+			const ONLINE_RECONNECT_MAX_DELAY_MS = 12000;
+			const ONLINE_STALE_AFTER_MS = 30000;
+			const presenceSessionId = getOrCreatePresenceSessionId();
+			let presenceSocket = null;
+			let presenceReconnectTimer = 0;
+			let presenceReconnectAttempts = 0;
+			let presenceLastCountAt = 0;
+			let presenceClosedByClient = false;
 
 			const swalAlert = (text, icon = 'error', button = '关闭') => swal({ text, icon, button });
 			const loadingMask = q('#loadingMask');
@@ -812,6 +917,142 @@
 			function hideLoading() {
 				if (loadingMask) loadingMask.classList.remove('show');
 			}
+
+			function createPresenceSessionId() {
+				try {
+					if (crypto && typeof crypto.randomUUID === 'function') {
+						return crypto.randomUUID().replace(/-/g, '');
+					}
+				} catch (_) { }
+				return (Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).replace(/[^a-z0-9]/gi, '').slice(0, 32);
+			}
+
+			function getOrCreatePresenceSessionId() {
+				try {
+					let current = sessionStorage.getItem(ONLINE_SESSION_STORAGE_KEY) || '';
+					if (!/^[a-zA-Z0-9_-]{12,120}$/.test(current)) {
+						current = createPresenceSessionId();
+						sessionStorage.setItem(ONLINE_SESSION_STORAGE_KEY, current);
+					}
+					return current;
+				} catch (_) {
+					return createPresenceSessionId();
+				}
+			}
+
+			function setPresenceStatus(state = 'pending') {
+				if (onlinePresenceCard) onlinePresenceCard.dataset.state = state;
+			}
+
+			function setPresenceVisibility(visible) {
+				if (!onlinePresenceCard) return;
+				onlinePresenceCard.style.display = visible ? 'flex' : 'none';
+			}
+
+			function applyPresenceCount(count) {
+				if (!onlineCountValue) return;
+				if (Number.isFinite(count) && count >= 0) {
+					onlineCountValue.textContent = String(Math.max(0, Math.floor(count)));
+					presenceLastCountAt = Date.now();
+					setPresenceStatus('online');
+					return;
+				}
+				onlineCountValue.textContent = '--';
+			}
+
+			function clearPresenceReconnectTimer() {
+				if (!presenceReconnectTimer) return;
+				clearTimeout(presenceReconnectTimer);
+				presenceReconnectTimer = 0;
+			}
+
+			function schedulePresenceReconnect() {
+				if (presenceClosedByClient || presenceReconnectTimer) return;
+				const delay = Math.min(ONLINE_RECONNECT_MIN_DELAY_MS * Math.pow(1.8, presenceReconnectAttempts), ONLINE_RECONNECT_MAX_DELAY_MS);
+				presenceReconnectAttempts += 1;
+				presenceReconnectTimer = setTimeout(() => {
+					presenceReconnectTimer = 0;
+					connectSitePresence();
+				}, delay);
+			}
+
+			function handlePresenceMessage(rawValue) {
+				let data;
+				try {
+					data = JSON.parse(String(rawValue || ''));
+				} catch (_) {
+					return;
+				}
+
+				if (data && data.type === 'site_online_count') {
+					applyPresenceCount(Number(data.online));
+				}
+			}
+
+			function connectSitePresence() {
+				if (!onlinePresenceCard) return;
+				if (!('WebSocket' in window)) {
+					setPresenceStatus('error');
+					return;
+				}
+				if (location.protocol !== 'http:' && location.protocol !== 'https:') {
+					setPresenceStatus('error');
+					return;
+				}
+				if (presenceSocket && (presenceSocket.readyState === WebSocket.OPEN || presenceSocket.readyState === WebSocket.CONNECTING)) {
+					return;
+				}
+
+				clearPresenceReconnectTimer();
+				presenceClosedByClient = false;
+				setPresenceStatus('pending');
+
+				const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+				const wsUrl = wsScheme + '//' + location.host + ONLINE_WS_PATH + '?sid=' + encodeURIComponent(presenceSessionId);
+				const ws = new WebSocket(wsUrl);
+				presenceSocket = ws;
+
+				ws.addEventListener('open', () => {
+					presenceReconnectAttempts = 0;
+					if (Date.now() - presenceLastCountAt > ONLINE_STALE_AFTER_MS) {
+						setPresenceStatus('pending');
+					} else {
+						setPresenceStatus('online');
+					}
+				});
+
+				ws.addEventListener('message', (event) => {
+					handlePresenceMessage(event.data);
+				});
+
+				ws.addEventListener('error', () => {
+					setPresenceStatus('error');
+				});
+
+				ws.addEventListener('close', () => {
+					if (presenceSocket === ws) presenceSocket = null;
+					if (presenceClosedByClient) return;
+
+					if (Date.now() - presenceLastCountAt <= ONLINE_STALE_AFTER_MS) {
+						setPresenceStatus('pending');
+					} else {
+						applyPresenceCount(NaN);
+						setPresenceStatus('error');
+					}
+					schedulePresenceReconnect();
+				});
+			}
+
+			function disconnectSitePresence() {
+				presenceClosedByClient = true;
+				clearPresenceReconnectTimer();
+				if (!presenceSocket) return;
+				try {
+					presenceSocket.close(1000, 'page closing');
+				} catch (_) { }
+				presenceSocket = null;
+			}
+
 			const SENSITIVE_TAG_MAP = {
 				qos: '\u5a9a\u9ed1\u5185\u5bb9',
 				ntr: '\u725b\u5934\u4eba\u5185\u5bb9',
@@ -1170,6 +1411,7 @@
 
 			document.addEventListener('DOMContentLoaded', () => {
 				setTimeout(() => document.querySelector('.wrap').classList.add('on'), 100);
+				connectSitePresence();
 				setTimeout(async () => {
 					const hasValidLocalToken = checkStoredTokenStatusOnLoad();
 					await checkBackendTokenStatusOnLoad(hasValidLocalToken);
@@ -1195,9 +1437,14 @@
 			});
 
 			window.addEventListener('pageshow', (evt) => {
+				if (presenceClosedByClient) connectSitePresence();
 				if (evt && evt.persisted) {
 					triggerClipboardCheckOnEntry('pageshow-bfcache');
 				}
+			});
+
+			window.addEventListener('pagehide', () => {
+				disconnectSitePresence();
 			});
 
 			document.addEventListener('visibilitychange', () => {
@@ -1305,6 +1552,7 @@
 				videoElement.pause();
 				videoElement.currentTime = 0;
 				iframeContainer.style.display = 'none';
+				setPresenceVisibility(true);
 				hideLoading();
 				// 清除旧监听器（避免重复绑定）
 				videoElement.onerror = null;
@@ -1424,6 +1672,7 @@
 					videoElement.pause();
 					videoElement.currentTime = 0;
 					iframeContainer.style.display = 'none';
+					setPresenceVisibility(false);
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
 					videoSource.src = finalUrl + '#t=' + getStartTimeForPlayback(); // 设置 video 源链接
@@ -1535,6 +1784,7 @@
 									iframeContainer.insertBefore(ytIframe, iframeContainer.firstChild);
 								}
 								ytIframe.src = ytEmbedSrc;
+								setPresenceVisibility(false);
 								ytIframe.style.display = 'block';
 								iframeContainer.style.display = 'flex';
 
@@ -1662,6 +1912,7 @@
 					videoElement.pause();
 					videoElement.currentTime = 0;
 					iframeContainer.style.display = 'none';
+					setPresenceVisibility(false);
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
 					videoSource.src = finalUrl + '#t=' + getStartTimeForPlayback(); // 设置 video 源链接
@@ -2281,4 +2532,380 @@
 	</script>
 </body>
 
-</html>
+</html>`
+
+// 建议这些变量在Cloudflare Worker的面板(优先级更高)里设置，这里设置也行
+// 如果你设置了默认Iwara账号的Token，那么我强烈建议你设置访问的用户名和密码进一步保证你的账号隐私安全（虽然项目有做保护）！！！
+const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
+const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
+const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
+const BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS = 86400; // 前端请求检测后端Token有效期间隔(单位秒，默认1天，后端未设置token生效)
+
+function pickEnvOrDefault(envValue, defaultValue = '') {
+	const v = typeof envValue === 'string' ? envValue.trim() : '';
+	if (v) return v;
+	return (defaultValue || '').trim();
+}
+
+function workerConfig(env) {
+	return {
+		basicUser: pickEnvOrDefault(env?.BASIC_AUTH_USER, DEFAULT_BASIC_AUTH_USER),
+		basicPass: pickEnvOrDefault(env?.BASIC_AUTH_PASS, DEFAULT_BASIC_AUTH_PASS),
+		iwaraAuthorization: pickEnvOrDefault(env?.IWARA_AUTHORIZATION, DEFAULT_IWARA_AUTHORIZATION)
+	};
+}
+
+function unauthorizedResponse() {
+	return new Response('Authentication required', {
+		status: 401,
+		headers: {
+			'content-type': 'text/plain; charset=UTF-8',
+			'WWW-Authenticate': 'Basic realm="IwaraProxy", charset="UTF-8"'
+		}
+	});
+}
+
+function verifyBasicAuth(request, env) {
+	const cfg = workerConfig(env);
+	const enabled = !!(cfg.basicUser || cfg.basicPass);
+	if (!enabled) return null;
+
+	const auth = request.headers.get('Authorization') || '';
+	if (!auth.startsWith('Basic ')) return unauthorizedResponse();
+
+	let decoded = '';
+	try {
+		decoded = atob(auth.slice(6));
+	} catch {
+		return unauthorizedResponse();
+	}
+	const idx = decoded.indexOf(':');
+	const user = idx >= 0 ? decoded.slice(0, idx) : decoded;
+	const pass = idx >= 0 ? decoded.slice(idx + 1) : '';
+	if (user !== cfg.basicUser || pass !== cfg.basicPass) return unauthorizedResponse();
+	return null;
+}
+
+function normalizeIwaraAuthorization(value) {
+	const v = (value || '').trim();
+	if (!v) return '';
+	return /^Bearer\s+/i.test(v) ? v : ('Bearer ' + v);
+}
+
+function resolveUpstreamAuthorization(request, env) {
+	const customizedToken = (request.headers.get('CustomizedToken') || '').trim();
+	if (customizedToken) return normalizeIwaraAuthorization(customizedToken);
+	const cfg = workerConfig(env);
+	return normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
+}
+
+function buildProxyRequest(targetUrl, request, env) {
+	const headers = new Headers(request.headers);
+
+	// Never forward local Basic Auth credentials to upstream.
+	headers.delete('Authorization');
+	headers.delete('authorization');
+
+	// Remove custom frontend token header after extracting it.
+	const customizedToken = (headers.get('CustomizedToken') || headers.get('customizedtoken') || '').trim();
+	headers.delete('CustomizedToken');
+	headers.delete('customizedtoken');
+
+	const cfg = workerConfig(env);
+	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || (cfg.iwaraAuthorization || '').trim());
+	if (upstreamAuthorization) {
+		headers.set('Authorization', upstreamAuthorization);
+	}
+
+	return new Request(targetUrl, {
+		method: request.method,
+		headers,
+		body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
+		redirect: 'follow'
+	});
+}
+function decodeJwtPayload(token) {
+	try {
+		const raw = (token || '').trim().replace(/^Bearer\s+/i, '');
+		if (!raw) return null;
+		const parts = raw.split('.');
+		if (parts.length !== 3) return null;
+		const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+		const padded = base64 + '='.repeat((4 - (base64.length % 4 || 4)) % 4);
+		return JSON.parse(atob(padded));
+	} catch {
+		return null;
+	}
+}
+
+function getBackendTokenStatus(env) {
+	const cfg = workerConfig(env);
+	const token = normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
+	if (!token) return { status: 'not_configured' };
+
+	const payload = decodeJwtPayload(token);
+	if (!payload || typeof payload.exp !== 'number') {
+		return { status: 'expired' };
+	}
+	const now = Math.floor(Date.now() / 1000);
+	return payload.exp > now ? { status: 'valid' } : { status: 'expired' };
+}
+
+function isAllowedIwaraViewTarget(urlObj) {
+	const protocol = String(urlObj.protocol || '').toLowerCase();
+	const host = String(urlObj.hostname || '').toLowerCase();
+	const pathname = String(urlObj.pathname || '');
+	const query = String(urlObj.search || '');
+	const protocolOk = protocol === 'http:' || protocol === 'https:';
+	const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(host);
+	const pathOk = pathname === '/view';
+	const queryOk = query.length > 1;
+	return protocolOk && hostOk && pathOk && queryOk;
+}
+
+
+function isAllowedProxyMethod(method) {
+	const mth = String(method || '').toUpperCase();
+	return mth === 'GET' || mth === 'OPTIONS';
+}
+
+function isProxyPath(pathname) {
+	return pathname.startsWith('/video/') || pathname.startsWith('/videos') || pathname.startsWith('/file/') || pathname.startsWith('/view');
+}
+
+function normalizePresenceSessionId(value) {
+	const v = String(value || '').trim();
+	return /^[a-zA-Z0-9_-]{12,120}$/.test(v) ? v : '';
+}
+
+function jsonResponse(data, status = 200, extraHeaders = {}) {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: Object.assign({
+			'content-type': 'application/json;charset=UTF-8',
+			'cache-control': 'no-store'
+		}, extraHeaders)
+	});
+}
+
+function getOnlineCounterStub(env) {
+	const namespace = env && env.ONLINE_COUNTER;
+	if (!namespace || typeof namespace.idFromName !== 'function' || typeof namespace.get !== 'function') {
+		return null;
+	}
+	return namespace.get(namespace.idFromName('global-site-presence'));
+}
+
+function buildDurableObjectRequest(targetUrl, request) {
+	return new Request(targetUrl, request);
+}
+
+function getSocketSessionId(socket) {
+	try {
+		const attachment = socket.deserializeAttachment();
+		return normalizePresenceSessionId(attachment && attachment.sessionId);
+	} catch {
+		return '';
+	}
+}
+
+function countUniquePresenceSessions(sockets) {
+	const sessionIds = new Set();
+	for (const socket of sockets || []) {
+		const sessionId = getSocketSessionId(socket);
+		if (sessionId) sessionIds.add(sessionId);
+	}
+	return sessionIds.size;
+}
+
+function createPresencePayload(online) {
+	return JSON.stringify({
+		type: 'site_online_count',
+		online: Math.max(0, Number(online) || 0),
+		ts: Date.now()
+	});
+}
+
+export class OnlineCounterDurableObject {
+	constructor(state, env) {
+		this.state = state;
+		this.env = env;
+	}
+
+	getOnlineCount() {
+		return countUniquePresenceSessions(this.state.getWebSockets());
+	}
+
+	broadcastOnlineCount() {
+		const payload = createPresencePayload(this.getOnlineCount());
+		for (const socket of this.state.getWebSockets()) {
+			try {
+				socket.send(payload);
+			} catch (_) { }
+		}
+	}
+
+	closeDuplicateSessions(sessionId, keepSocket = null) {
+		for (const socket of this.state.getWebSockets()) {
+			if (socket === keepSocket) continue;
+			if (getSocketSessionId(socket) !== sessionId) continue;
+			try {
+				socket.close(1000, 'session replaced');
+			} catch (_) { }
+		}
+	}
+
+	async fetch(request) {
+		const url = new URL(request.url);
+		if (url.pathname === '/count') {
+			return jsonResponse({ online: this.getOnlineCount() });
+		}
+
+		const upgradeHeader = request.headers.get('Upgrade') || '';
+		if (upgradeHeader.toLowerCase() !== 'websocket') {
+			return jsonResponse({ error: 'Expected websocket upgrade request' }, 426, { 'upgrade': 'websocket' });
+		}
+
+		const sessionId = normalizePresenceSessionId(url.searchParams.get('sid'));
+		if (!sessionId) {
+			return jsonResponse({ error: '缺少有效的会话标识' }, 400);
+		}
+
+		const webSocketPair = new WebSocketPair();
+		const clientSocket = webSocketPair[0];
+		const serverSocket = webSocketPair[1];
+
+		this.closeDuplicateSessions(sessionId);
+		this.state.acceptWebSocket(serverSocket);
+		serverSocket.serializeAttachment({ sessionId });
+
+		this.broadcastOnlineCount();
+		return new Response(null, {
+			status: 101,
+			webSocket: clientSocket
+		});
+	}
+
+	webSocketMessage(ws, message) {
+		if (String(message || '').trim().toLowerCase() === 'ping') {
+			try {
+				ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
+			} catch (_) { }
+		}
+	}
+
+	webSocketClose() {
+		this.broadcastOnlineCount();
+	}
+
+	webSocketError(ws) {
+		try {
+			ws.close(1011, 'socket error');
+		} catch (_) { }
+		this.broadcastOnlineCount();
+	}
+}
+
+export default {
+	async fetch(request, env) {
+		const authFailed = verifyBasicAuth(request, env);
+		if (authFailed) return authFailed;
+
+		let url = new URL(request.url);
+		if (isProxyPath(url.pathname) && !isAllowedProxyMethod(request.method)) {
+			return new Response(JSON.stringify({ error: '仅允许代理GET和OPTIONS请求' }), {
+				status: 403,
+				headers: { 'content-type': 'application/json;charset=UTF-8', 'allow': 'GET, OPTIONS' }
+			});
+		}
+		if (isProxyPath(url.pathname) && String(request.method || '').toUpperCase() === 'OPTIONS') {
+			return new Response(null, {
+				status: 204,
+				headers: {
+					'allow': 'GET, OPTIONS',
+					'access-control-allow-methods': 'GET, OPTIONS',
+					'access-control-allow-origin': '*',
+					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Range'
+				}
+			});
+		}
+
+		if (url.pathname === '/token-status') {
+			const status = getBackendTokenStatus(env);
+			if (status.status === 'not_configured') {
+				return new Response(null, {
+					status: 204,
+					headers: { 'Retry-After': String(BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS) }
+				});
+			}
+			if (status.status === 'valid') {
+				return new Response(null, { status: 204 });
+			}
+			return new Response(JSON.stringify({ code: 'backend_token_expired', message: '后端设置的token已过期！' }), {
+				status: 200,
+				headers: { 'content-type': 'application/json;charset=UTF-8' }
+			});
+		} else if (url.pathname === '/online-count' || url.pathname === '/online-presence') {
+			const counterStub = getOnlineCounterStub(env);
+			if (!counterStub) {
+				return jsonResponse({ error: 'ONLINE_COUNTER Durable Object 未绑定' }, 503);
+			}
+
+			const targetUrl = new URL(request.url);
+			targetUrl.pathname = url.pathname === '/online-count' ? '/count' : '/ws';
+			targetUrl.search = url.search;
+			return counterStub.fetch(buildDurableObjectRequest(targetUrl.toString(), request));
+		} else if (url.pathname === '/') {
+			return new Response(html, {
+				headers: {
+					"content-type": "text/html;charset=UTF-8",
+				},
+			});
+		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
+			url.hostname = 'apiq.iwara.tv';
+			return fetch(buildProxyRequest(url.toString(), request, env));
+		} else if (url.pathname.startsWith('/view')) {
+			let finUrl = url.searchParams.get('url');
+			if (!finUrl) {
+				return new Response('{"error":"缺少url参数值"}', {
+					status: 400,
+					headers: { "content-type": "application/json;charset=UTF-8" }
+				});
+			}
+
+			let decoded;
+			try {
+				decoded = decodeURIComponent(finUrl);
+			} catch {
+				return new Response('{"error":"url参数格式错误"}', {
+					status: 400,
+					headers: { "content-type": "application/json;charset=UTF-8" }
+				});
+			}
+
+			let urlObj;
+			try {
+				urlObj = new URL(decoded);
+			} catch {
+				return new Response('{"error":"url参数格式错误"}', {
+					status: 400,
+					headers: { "content-type": "application/json;charset=UTF-8" }
+				});
+			}
+
+			if (!isAllowedIwaraViewTarget(urlObj)) {
+				return new Response('{"error":"请勿滥用接口"}', {
+					status: 403,
+					headers: { "content-type": "application/json;charset=UTF-8" },
+				});
+			}
+			return fetch(buildProxyRequest(decoded, request, env));
+		} else if (url.pathname.startsWith('/file/')) {
+			url.hostname = 'filesq.iwara.tv';
+			return fetch(buildProxyRequest(url.toString(), request, env));
+		}
+		return env.ASSETS.fetch(request);
+	}
+
+};
+

@@ -387,15 +387,15 @@
 			white-space: nowrap;
 		}
 
-		#pageSizeSelect {
-			padding: 5px 10px;
+		#pageSizeSelect, #viewContentSelect {
+			padding: 5px 8px;
 			border: 1px solid rgba(0, 0, 0, 0.2);
 			border-radius: 4px;
 			background: rgba(0, 0, 0, 0.05);
 			color: #333333;
 		}
 
-		#pageSizeSelect option {
+		#pageSizeSelect option, #viewContentSelect option {
 			background: #ffffff;
 			color: #333333;
 		}
@@ -720,10 +720,16 @@
 			</table>
 			<div id="paginationControls" style="margin:15px 0; text-align:center; display:none;">
 				<div style="margin-bottom:10px;">
-					<label>每页显示：</label>
+					<label>每页显示:</label>
 					<select id="pageSizeSelect">
 						<option value="5">5条</option>
 						<option value="10">10条</option>
+					</select>
+					<label style="margin-left: 10px;">显示内容:</label>
+					<select id="viewContentSelect">
+						<option value="all">全部</option>
+						<option value="tv">仅TV</option>
+						<option value="ai">仅AI</option>
 					</select>
 				</div>
 				<div>
@@ -1350,7 +1356,7 @@
 				const currentPrefix = hostParts[0];
 
 				const group1 = ['mikoto', 'hime'];
-				const group2 = ['asta', 'acheron', 'firefly', 'hook', 'hanya', 'camellya'];
+				const group2 = ['asta', 'acheron', 'firefly', 'hook', 'hanya', 'camellya', 'welt', 'bailu', 'topaz', 'sparkle', 'pela'];
 
 				let availableOptions = [];
 				if (group1.includes(currentPrefix)) {
@@ -1791,6 +1797,7 @@
 
 				const saveTableBody = saveContainer.querySelector('tbody');
 				const pageSizeSelect = saveContainer.querySelector('#pageSizeSelect');
+				const viewContentSelect = saveContainer.querySelector('#viewContentSelect');
 				const firstPageBtn = saveContainer.querySelector('#firstPage');
 				const prevPageBtn = saveContainer.querySelector('#prevPage');
 				const nextPageBtn = saveContainer.querySelector('#nextPage');
@@ -1801,10 +1808,23 @@
 				let currentPage = 1;
 				let pageSize = 5;
 				let totalPages = 1;
+				let filteredDataArray = [];
+
+				function getFilteredData() {
+					const dataArray = Object.entries(reversedData);
+					const filterValue = viewContentSelect ? viewContentSelect.value : 'all';
+					if (filterValue === 'tv') {
+						return dataArray.filter(([, item]) => normalizeSiteType(item && item.type) !== 'ai');
+					} else if (filterValue === 'ai') {
+						return dataArray.filter(([, item]) => normalizeSiteType(item && item.type) === 'ai');
+					}
+					return dataArray;
+				}
 
 				// 计算总页数
 				function calculateTotalPages() {
-					const totalItems = Object.keys(reversedData).length;
+					filteredDataArray = getFilteredData();
+					const totalItems = filteredDataArray.length;
 					totalPages = Math.ceil(totalItems / pageSize);
 					if (totalPages === 0) totalPages = 1;
 				}
@@ -1813,10 +1833,9 @@
 				function renderCurrentPage() {
 					saveTableBody.innerHTML = '';
 
-					const dataArray = Object.entries(reversedData);
 					const startIndex = (currentPage - 1) * pageSize;
-					const endIndex = Math.min(startIndex + pageSize, dataArray.length);
-					const cur = dataArray.slice(startIndex, endIndex);
+					const endIndex = Math.min(startIndex + pageSize, filteredDataArray.length);
+					const cur = filteredDataArray.slice(startIndex, endIndex);
 
 					cur.forEach(([id, item]) => {
 						const tr = document.createElement('tr');
@@ -1891,7 +1910,13 @@
 					nextPageBtn.disabled = currentPage === totalPages;
 					lastPageBtn.disabled = currentPage === totalPages;
 
-					paginationControls.style.display = totalPages > 1 ? 'block' : 'none';
+					const hasAnyData = Object.keys(reversedData).length > 0;
+					paginationControls.style.display = hasAnyData ? 'block' : 'none';
+					
+					const pageNavPanel = paginationControls.querySelector('div:last-child');
+					if (pageNavPanel) {
+						pageNavPanel.style.display = totalPages > 1 ? 'flex' : 'none';
+					}
 				}
 
 				// 分页按钮
@@ -1940,6 +1965,24 @@
 					}
 				});
 
+				if (viewContentSelect) {
+					viewContentSelect.onchange = () => {
+						currentPage = 1;
+						calculateTotalPages();
+						renderCurrentPage();
+						updateControls();
+						
+						const titleMap = {
+							all: '我的收藏（全部）',
+							tv: '我的收藏（仅TV）',
+							ai: '我的收藏（仅AI）'
+						};
+						const titleText = titleMap[viewContentSelect.value] || '我的收藏（全部）';
+						const titleEl = document.querySelector('.swal-title');
+						if (titleEl) titleEl.textContent = titleText;
+					};
+				}
+
 				// 初始化
 				calculateTotalPages();
 				renderCurrentPage();
@@ -1947,7 +1990,7 @@
 
 				// SweetAlert 弹窗
 				swal({
-					title: '我的收藏',
+					title: '我的收藏（全部）',
 					content: saveContainer,
 					buttons: {
 						clear: {

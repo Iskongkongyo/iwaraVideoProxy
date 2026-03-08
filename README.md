@@ -25,13 +25,14 @@
 
 ## 📂  项目主要文件说明
 
-| **文件 / 目录**        | **说明**                                                    |
-| ---------------------- | ----------------------------------------------------------- |
-| `index.html`           | **核心前端**：HTML/CSS/JS 单文件，无需复杂构建              |
-| `sweetalert.min.js`    | **UI 组件**：提供优雅的前端弹窗交互                         |
-| `Worker部署/worker.js` | **CF Worker 后端**：已内嵌前端模板，实现零服务器部署        |
-| `第三方反代部署/`      | **混合方案**：基于 Node.js，通过第三方接口进行请求转发      |
-| `完全私有部署/`        | **全控方案**：包含 Node.js 与 Python 两套环境，完全掌控流量 |
+| **文件 / 目录**                  | **说明**                                                     |
+| -------------------------------- | ------------------------------------------------------------ |
+| `index.html`                     | **核心前端**：HTML/CSS/JS 单文件，无需复杂构建               |
+| `sweetalert.min.js`              | **UI 组件**：提供优雅的前端弹窗交互                          |
+| `Worker部署/worker.js`           | **CF Worker 后端**：已内嵌前端模板，实现零服务器部署         |
+| `Worker部署(有会话版)/worker.js` | **CF Worker 后端**：会在屏幕左上角额外显示网站访问实时会话数 |
+| `第三方反代部署/`                | **混合方案**：基于 Node.js，通过第三方接口进行请求转发       |
+| `完全私有部署/`                  | **全控方案**：包含 Node.js 与 Python 两套环境，完全掌控流量  |
 
 ------
 
@@ -101,9 +102,51 @@
 ### 🌟 A. Cloudflare Worker (推荐)
 
 1. 复制 `Worker部署/worker.js` 内容。
-2. 在 Cloudflare 后台创建新的 Worker 并粘贴代码。
-3. **环境变量**：在面板中添加 `BASIC_AUTH_USER` 等变量（比改代码更安全）。
+
+2. 在 [Cloudflare后台](https://dash.cloudflare.com/login) 创建新的 Worker 并粘贴代码。
+
+3. **环境变量**：两种填写方式，第一种在worker.js文件中找到下面👇这段自行填写
+
+   ```
+   const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
+   const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
+   const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
+   ```
+
+   第二种，在Worker面板中添加 `BASIC_AUTH_USER` 、`BASIC_AUTH_PASS`或`IWARA_AUTHORIZATION`变量（比改代码更安全）。
+
+   修改位置在`构建 -> Compute -> Workers 和 Pages -> 设置 -> 变量和机密`，在里面填写你需要的环境变量然后重新部署即可！
+
 4. **注意**：建议绑定自定义域名，因为 `*.workers.dev` 在国内部分网络环境受限。
+
+另外，想要部署带会话版的话，需先安装[Node.js](https://nodejs.org/zh-cn/download)版本20及以上版本！安装后按以下操作执行：
+
+> [!NOTE]
+>
+> 会话版需worker.js绑定使用Cloudflare的Durable Objects（耐用对象）。截止2026年3月8日，Cloudflare 官方对Durable Objects的免费额度是：
+>
+> - Durable Objects 100,000 requests/day
+> - Durable Objects 13,000 GB-s/day
+> - Durable Objects的使用情况可在构建 -> Compute -> Durable Objects里查看！！！
+
+**本地安装Wrangler**
+
+```
+npm install -D wrangler@latest
+```
+
+**修改wrangler.toml**
+
+把需要填写的内容补充完整，如：worker服务名和环境变量。
+
+**部署Cloudfalre**
+
+执行第一步会打开浏览器要求授权，记得授予权限（代理启用Tun的请关闭，否则授权可能出问题）！
+
+```
+npx wrangler login
+npx wrangler deploy
+```
 
 ### 📦 B. Node.js 环境 (第三方或私有部署)
 

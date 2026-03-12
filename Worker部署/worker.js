@@ -802,6 +802,7 @@ const html = `
 				pendingStartTimeSec = 0;
 
 			const swalAlert = (text, icon = 'error', button = '关闭') => swal({ text, icon, button });
+                        const SENSITIVE_PROMPT_DISABLED_KEY = 'sensitive_prompt_disabled_v1';
 			const loadingMask = q('#loadingMask');
 			const loadingText = q('#loadingText');
 
@@ -813,6 +814,21 @@ const html = `
 			function hideLoading() {
 				if (loadingMask) loadingMask.classList.remove('show');
 			}
+
+                        function isSensitivePromptDisabled() {
+				try {
+					return localStorage.getItem(SENSITIVE_PROMPT_DISABLED_KEY) === '1';
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function disableSensitivePrompt() {
+				try {
+					localStorage.setItem(SENSITIVE_PROMPT_DISABLED_KEY, '1');
+				} catch (_) { }
+			}
+
 			const SENSITIVE_TAG_MAP = {
 				qos: '\u5a9a\u9ed1\u5185\u5bb9',
 				ntr: '\u725b\u5934\u4eba\u5185\u5bb9',
@@ -1511,8 +1527,8 @@ const html = `
 
 								// 记录当前是 YouTube 视频
 								window.currentYoutubeId = ytVideoId;
-								// 默认使用用户上次选择的源，或者官方源
-								const ytSource = localStorage.getItem('ytSource') || 'https://www.youtube.com/embed/';
+								// 默认使用官方源
+								const ytSource = 'https://www.youtube.com/embed/';
 								const ytEmbedSrc = ytSource + ytVideoId + (ytSource.includes('?') ? '&' : '?') + 'autoplay=1';
 
 								// 使用 iframe 播放 YouTube 视频
@@ -1558,33 +1574,43 @@ const html = `
 
 					currentVideoName = data.title + '.' + data.file.mime.replace('video/', '');
 					// Sensitive content prompt (title + tags, case-insensitive)
-					const sensitiveCheck = detectSensitiveContent(data);
+					const sensitiveCheck = isSensitivePromptDisabled() ? { matched: false, titleHits: [], tagHits: [] } : detectSensitiveContent(data);
 					if (sensitiveCheck.matched) {
-						const hitParts = [];
-						if (sensitiveCheck.titleHits.length) {
-							hitParts.push('标题: ' + sensitiveCheck.titleHits.map(formatSensitiveTagLabel).join(', '));
-						}
-						if (sensitiveCheck.tagHits.length) {
-							hitParts.push('标签: ' + sensitiveCheck.tagHits.map(formatSensitiveTagLabel).join(', '));
-						}
+						const mergedSensitiveTags = Array.from(new Set([
+							...(Array.isArray(sensitiveCheck.titleHits) ? sensitiveCheck.titleHits : []),
+							...(Array.isArray(sensitiveCheck.tagHits) ? sensitiveCheck.tagHits : [])
+						]));
 						let pauseIntv = setInterval(() => videoElement.pause(), 300);
 						const proceed = await swal({
 							title: '温馨提示',
-							text: '检测到高敏感内容' + hitParts.join('；') + '，是否继续观看？',
+							text: '检测到视频含有高敏感内容：' + mergedSensitiveTags.map(formatSensitiveTagLabel).join('、') + '，是否继续观看？',
 							buttons: {
-								cancel: {
-									text: "播放",
-									value: false,
-									visible: true
+								disable: {
+									text: "不再提示",
+									value: 'disable'
 								},
 								confirm: {
-									text: "不播放",
+									text: "播放",
 									value: true
+								},
+								cancel: {
+									text: "不播放",
+									value: false,
+									visible: true
 								}
 							}
 						});
 						clearInterval(pauseIntv);
-						if (proceed) {
+						if (proceed === 'disable') {
+							disableSensitivePrompt();
+							swal({
+								text: '已关闭高敏感内容提示，后续将不再检测。',
+								icon: 'success',
+								buttons: false,
+								timer: 2500
+							});
+						}
+						else if (!proceed) {
 							btnCloseOverlay.click();
 							return;
 						}

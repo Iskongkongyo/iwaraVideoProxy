@@ -1793,6 +1793,14 @@ const html = `
 				return { id, url: parsedUrl.toString(), type: siteType };
 			}
 
+			function getCurrentInputVideoId() {
+				const raw = String(inputVideo && inputVideo.value || '').trim();
+				if (!raw) return '';
+				const info = extractIwaraVideoInfoFromText(raw);
+				if (info && info.id) return info.id;
+				return /^[0-9A-Za-z]{9,}$/.test(raw) ? raw : '';
+			}
+
 
 			async function promptQualityBeforePlay() {
 				const qualitySelect = document.createElement('select');
@@ -1942,6 +1950,11 @@ const html = `
 					const info = extractIwaraVideoInfoFromText(clipboardText);
 					if (!info) {
 						clipboardLog('没有Iwara网站链接！');
+						return;
+					}
+					const currentInputVideoId = getCurrentInputVideoId();
+					if (currentInputVideoId && currentInputVideoId === info.id) {
+						clipboardLog('剪切板视频ID与输入框一致，跳过提示！', info.id);
 						return;
 					}
 					await promptPlayDetectedIwaraLink(info);

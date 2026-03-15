@@ -1,3 +1,381 @@
+// 变量分全局变量和环境变量，在这里改代码设置用户名、密码和Token是全局变量，可以用但不建议！
+// 设置用户名、密码和Token更建议在Cloudflare Worker的面板(优先级更高)里设置！
+// 用户名、密码和Token对应的环境变量名分别为BASIC_AUTH_USER、BASIC_AUTH_PASS和IWARA_AUTHORIZATION！
+// 如果你设置了默认Iwara账号的Token，那么我强烈建议你设置访问的用户名和密码进一步保证你的账号隐私安全（虽然项目有做保护）！！！
+const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
+const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
+const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
+const BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS = 86400; // 前端请求检测后端Token有效期间隔(单位秒，默认1天，后端未设置token生效)
+
+function pickEnvOrDefault(envValue, defaultValue = '') {
+	const v = typeof envValue === 'string' ? envValue.trim() : '';
+	if (v) return v;
+	return (defaultValue || '').trim();
+}
+
+function workerConfig(env) {
+	return {
+		basicUser: pickEnvOrDefault(env?.BASIC_AUTH_USER, DEFAULT_BASIC_AUTH_USER),
+		basicPass: pickEnvOrDefault(env?.BASIC_AUTH_PASS, DEFAULT_BASIC_AUTH_PASS),
+		iwaraAuthorization: pickEnvOrDefault(env?.IWARA_AUTHORIZATION, DEFAULT_IWARA_AUTHORIZATION)
+	};
+}
+
+function unauthorizedResponse() {
+	return new Response('Authentication required', {
+		status: 401,
+		headers: {
+			'content-type': 'text/plain; charset=UTF-8',
+			'WWW-Authenticate': 'Basic realm="IwaraProxy", charset="UTF-8"'
+		}
+	});
+}
+
+function verifyBasicAuth(request, env) {
+	const cfg = workerConfig(env);
+	const enabled = !!(cfg.basicUser || cfg.basicPass);
+	if (!enabled) return null;
+
+	const auth = request.headers.get('Authorization') || '';
+	if (!auth.startsWith('Basic ')) return unauthorizedResponse();
+
+	let decoded = '';
+	try {
+		decoded = atob(auth.slice(6));
+	} catch {
+		return unauthorizedResponse();
+	}
+	const idx = decoded.indexOf(':');
+	const user = idx >= 0 ? decoded.slice(0, idx) : decoded;
+	const pass = idx >= 0 ? decoded.slice(idx + 1) : '';
+	if (user !== cfg.basicUser || pass !== cfg.basicPass) return unauthorizedResponse();
+	return null;
+}
+
+function normalizeIwaraAuthorization(value) {
+	const v = (value || '').trim();
+	if (!v) return '';
+	return /^Bearer\s+/i.test(v) ? v : ('Bearer ' + v);
+}
+
+function resolveUpstreamAuthorization(request, env) {
+	const customizedToken = (request.headers.get('CustomizedToken') || '').trim();
+	if (customizedToken) return normalizeIwaraAuthorization(customizedToken);
+	const cfg = workerConfig(env);
+	return normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
+}
+
+function buildProxyRequest(targetUrl, request, env) {
+	const headers = new Headers(request.headers);
+
+	headers.delete('Authorization');
+	headers.delete('authorization');
+
+	const customizedToken = (headers.get('CustomizedToken') || headers.get('customizedtoken') || '').trim();
+	headers.delete('CustomizedToken');
+	headers.delete('customizedtoken');
+
+	const cfg = workerConfig(env);
+	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || (cfg.iwaraAuthorization || '').trim());
+	if (upstreamAuthorization) {
+		headers.set('Authorization', upstreamAuthorization);
+	}
+
+	return new Request(targetUrl, {
+		method: request.method,
+		headers,
+		body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
+		redirect: 'follow'
+	});
+}
+function decodeJwtPayload(token) {
+	try {
+		const raw = (token || '').trim().replace(/^Bearer\s+/i, '');
+		if (!raw) return null;
+		const parts = raw.split('.');
+		if (parts.length !== 3) return null;
+		const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+		const padded = base64 + '='.repeat((4 - (base64.length % 4 || 4)) % 4);
+		return JSON.parse(atob(padded));
+	} catch {
+		return null;
+	}
+}
+
+function getBackendTokenStatus(env) {
+	const cfg = workerConfig(env);
+	const token = normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
+	if (!token) return { status: 'not_configured' };
+
+	const payload = decodeJwtPayload(token);
+	if (!payload || typeof payload.exp !== 'number') {
+		return { status: 'expired' };
+	}
+	const now = Math.floor(Date.now() / 1000);
+	return payload.exp > now ? { status: 'valid' } : { status: 'expired' };
+}
+
+function isAllowedIwaraViewTarget(urlObj) {
+	const protocol = String(urlObj.protocol || '').toLowerCase();
+	const host = String(urlObj.hostname || '').toLowerCase();
+	const pathname = String(urlObj.pathname || '');
+	const query = String(urlObj.search || '');
+	const protocolOk = protocol === 'http:' || protocol === 'https:';
+	const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(host);
+	const pathOk = pathname === '/view';
+	const queryOk = query.length > 1;
+	return protocolOk && hostOk && pathOk && queryOk;
+}
+
+
+function isAllowedProxyMethod(method) {
+	const mth = String(method || '').toUpperCase();
+	return mth === 'GET' || mth === 'OPTIONS';
+}
+
+function isProxyPath(pathname) {
+	return pathname.startsWith('/video/') || pathname.startsWith('/videos') || pathname.startsWith('/file/') || pathname.startsWith('/view');
+}
+
+function normalizePresenceSessionId(value) {
+	const v = String(value || '').trim();
+	return /^[a-zA-Z0-9_-]{12,120}$/.test(v) ? v : '';
+}
+
+function jsonResponse(data, status = 200, extraHeaders = {}) {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: Object.assign({
+			'content-type': 'application/json;charset=UTF-8',
+			'cache-control': 'no-store'
+		}, extraHeaders)
+	});
+}
+
+function getOnlineCounterStub(env) {
+	const namespace = env && env.ONLINE_COUNTER;
+	if (!namespace || typeof namespace.idFromName !== 'function' || typeof namespace.get !== 'function') {
+		return null;
+	}
+	return namespace.get(namespace.idFromName('global-site-presence'));
+}
+
+function buildDurableObjectRequest(targetUrl, request) {
+	return new Request(targetUrl, request);
+}
+
+function getSocketSessionId(socket) {
+	try {
+		const attachment = socket.deserializeAttachment();
+		return normalizePresenceSessionId(attachment && attachment.sessionId);
+	} catch {
+		return '';
+	}
+}
+
+function countUniquePresenceSessions(sockets) {
+	const sessionIds = new Set();
+	for (const socket of sockets || []) {
+		const sessionId = getSocketSessionId(socket);
+		if (sessionId) sessionIds.add(sessionId);
+	}
+	return sessionIds.size;
+}
+
+function createPresencePayload(online) {
+	return JSON.stringify({
+		type: 'site_online_count',
+		online: Math.max(0, Number(online) || 0),
+		ts: Date.now()
+	});
+}
+
+export class OnlineCounterDurableObject {
+	constructor(state, env) {
+		this.state = state;
+		this.env = env;
+	}
+
+	getOnlineCount() {
+		return countUniquePresenceSessions(this.state.getWebSockets());
+	}
+
+	broadcastOnlineCount() {
+		const payload = createPresencePayload(this.getOnlineCount());
+		for (const socket of this.state.getWebSockets()) {
+			try {
+				socket.send(payload);
+			} catch (_) { }
+		}
+	}
+
+	closeDuplicateSessions(sessionId, keepSocket = null) {
+		for (const socket of this.state.getWebSockets()) {
+			if (socket === keepSocket) continue;
+			if (getSocketSessionId(socket) !== sessionId) continue;
+			try {
+				socket.close(1000, 'session replaced');
+			} catch (_) { }
+		}
+	}
+
+	async fetch(request) {
+		const url = new URL(request.url);
+		if (url.pathname === '/count') {
+			return jsonResponse({ online: this.getOnlineCount() });
+		}
+
+		const upgradeHeader = request.headers.get('Upgrade') || '';
+		if (upgradeHeader.toLowerCase() !== 'websocket') {
+			return jsonResponse({ error: '预期 WebSocket 升级请求！' }, 426, { 'upgrade': 'websocket' });
+		}
+
+		const sessionId = normalizePresenceSessionId(url.searchParams.get('sid'));
+		if (!sessionId) {
+			return jsonResponse({ error: '缺少有效的会话标识！' }, 400);
+		}
+
+		const webSocketPair = new WebSocketPair();
+		const clientSocket = webSocketPair[0];
+		const serverSocket = webSocketPair[1];
+
+		this.closeDuplicateSessions(sessionId);
+		this.state.acceptWebSocket(serverSocket);
+		serverSocket.serializeAttachment({ sessionId });
+
+		this.broadcastOnlineCount();
+		return new Response(null, {
+			status: 101,
+			webSocket: clientSocket
+		});
+	}
+
+	webSocketMessage(ws, message) {
+		if (String(message || '').trim().toLowerCase() === 'ping') {
+			try {
+				ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
+			} catch (_) { }
+		}
+	}
+
+	webSocketClose() {
+		this.broadcastOnlineCount();
+	}
+
+	webSocketError(ws) {
+		try {
+			ws.close(1011, 'socket error');
+		} catch (_) { }
+		this.broadcastOnlineCount();
+	}
+}
+
+export default {
+	async fetch(request, env) {
+		const authFailed = verifyBasicAuth(request, env);
+		if (authFailed) return authFailed;
+
+		let url = new URL(request.url);
+		if (isProxyPath(url.pathname) && !isAllowedProxyMethod(request.method)) {
+			return new Response(JSON.stringify({ error: '仅允许代理GET和OPTIONS请求！' }), {
+				status: 403,
+				headers: { 'content-type': 'application/json;charset=UTF-8', 'allow': 'GET, OPTIONS' }
+			});
+		}
+		if (isProxyPath(url.pathname) && String(request.method || '').toUpperCase() === 'OPTIONS') {
+			return new Response(null, {
+				status: 204,
+				headers: {
+					'allow': 'GET, OPTIONS',
+					'access-control-allow-methods': 'GET, OPTIONS',
+					'access-control-allow-origin': '*',
+					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Range'
+				}
+			});
+		}
+
+		if (url.pathname === '/token-status') {
+			const status = getBackendTokenStatus(env);
+			if (status.status === 'not_configured') {
+				return new Response(null, {
+					status: 204,
+					headers: { 'Retry-After': String(BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS) }
+				});
+			}
+			if (status.status === 'valid') {
+				return new Response(null, { status: 204 });
+			}
+			return new Response(JSON.stringify({ code: 'backend_token_expired', message: '后端设置的token已过期！' }), {
+				status: 200,
+				headers: { 'content-type': 'application/json;charset=UTF-8' }
+			});
+		} else if (url.pathname === '/online-count' || url.pathname === '/online-presence') {
+			const counterStub = getOnlineCounterStub(env);
+			if (!counterStub) {
+				return jsonResponse({ error: 'ONLINE_COUNTER Durable Object 未绑定！' }, 503);
+			}
+
+			const targetUrl = new URL(request.url);
+			targetUrl.pathname = url.pathname === '/online-count' ? '/count' : '/ws';
+			targetUrl.search = url.search;
+			return counterStub.fetch(buildDurableObjectRequest(targetUrl.toString(), request));
+		} else if (url.pathname === '/') {
+			return new Response(html, {
+				headers: {
+					"content-type": "text/html;charset=UTF-8",
+				},
+			});
+		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
+			url.hostname = 'apiq.iwara.tv';
+			return fetch(buildProxyRequest(url.toString(), request, env));
+		} else if (url.pathname.startsWith('/view')) {
+			let finUrl = url.searchParams.get('url');
+			if (!finUrl) {
+				return new Response('{"error":"缺少url参数值！"}', {
+					status: 400,
+					headers: { "content-type": "application/json;charset=UTF-8" }
+				});
+			}
+
+			let decoded;
+			try {
+				decoded = decodeURIComponent(finUrl);
+			} catch {
+				return new Response('{"error":"url参数格式错误！"}', {
+					status: 400,
+					headers: { "content-type": "application/json;charset=UTF-8" }
+				});
+			}
+
+			let urlObj;
+			try {
+				urlObj = new URL(decoded);
+			} catch {
+				return new Response('{"error":"url参数格式错误！"}', {
+					status: 400,
+					headers: { "content-type": "application/json;charset=UTF-8" }
+				});
+			}
+
+			if (!isAllowedIwaraViewTarget(urlObj)) {
+				return new Response('{"error":"请勿滥用接口！"}', {
+					status: 403,
+					headers: { "content-type": "application/json;charset=UTF-8" },
+				});
+			}
+			return fetch(buildProxyRequest(decoded, request, env));
+		} else if (url.pathname.startsWith('/file/')) {
+			url.hostname = 'filesq.iwara.tv';
+			return fetch(buildProxyRequest(url.toString(), request, env));
+		}
+		return env.ASSETS.fetch(request);
+	}
+
+};
+
+
+
+// 网站源码
 const html = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -893,12 +1271,15 @@ const html = `
 				currentVideoName = '',
 				currentVideoUrl = '',
 				pendingStartTimeSec = 0;
+			let currentYoutubePlayer = null;
+			let youtubeIframeApiPromise = null;
 			const ONLINE_SESSION_STORAGE_KEY = 'iwara_site_presence_session_v1';
 			const ONLINE_WS_PATH = '/online-presence';
 			const ONLINE_RECONNECT_MIN_DELAY_MS = 1500;
 			const ONLINE_RECONNECT_MAX_DELAY_MS = 12000;
 			const ONLINE_STALE_AFTER_MS = 30000;
 			const SENSITIVE_PROMPT_DISABLED_KEY = 'sensitive_prompt_disabled_v1';
+			const YOUTUBE_PROMPT_DISABLED_KEY = 'youtube_prompt_disabled_v1';
 			const presenceSessionId = getOrCreatePresenceSessionId();
 			let presenceSocket = null;
 			let presenceReconnectTimer = 0;
@@ -962,6 +1343,119 @@ const html = `
 				try {
 					localStorage.setItem(SENSITIVE_PROMPT_DISABLED_KEY, '1');
 				} catch (_) { }
+			}
+
+			function isYouTubePromptDisabled() {
+				try {
+					return localStorage.getItem(YOUTUBE_PROMPT_DISABLED_KEY) === '1';
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function disableYouTubePrompt() {
+				try {
+					localStorage.setItem(YOUTUBE_PROMPT_DISABLED_KEY, '1');
+				} catch (_) { }
+			}
+
+			function loadYouTubeIframeApi() {
+				if (window.YT && typeof window.YT.Player === 'function') {
+					return Promise.resolve(window.YT);
+				}
+				if (youtubeIframeApiPromise) return youtubeIframeApiPromise;
+
+				youtubeIframeApiPromise = new Promise((resolve, reject) => {
+					const previousReady = window.onYouTubeIframeAPIReady;
+					window.onYouTubeIframeAPIReady = () => {
+						if (typeof previousReady === 'function') {
+							try { previousReady(); } catch (_) { }
+						}
+						if (window.YT && typeof window.YT.Player === 'function') {
+							resolve(window.YT);
+						} else {
+							reject(new Error('YouTube IFrame API 初始化失败'));
+						}
+					};
+
+					const existingScript = document.getElementById('youtube-iframe-api');
+					if (existingScript) return;
+
+					const script = document.createElement('script');
+					script.id = 'youtube-iframe-api';
+					script.src = 'https://www.youtube.com/iframe_api';
+					script.async = true;
+					script.onerror = () => reject(new Error('YouTube IFrame API 加载失败'));
+					document.head.appendChild(script);
+				});
+
+				return youtubeIframeApiPromise;
+			}
+
+			function buildYouTubeEmbedSrc(videoId, startSeconds = 0) {
+				const params = new URLSearchParams();
+				params.set('enablejsapi', '1');
+				params.set('playsinline', '1');
+				if (location.origin) params.set('origin', location.origin);
+				const start = Math.max(0, Math.floor(Number(startSeconds) || 0));
+				if (start > 0) params.set('start', String(start));
+				return 'https://www.youtube.com/embed/' + encodeURIComponent(videoId) + '?' + params.toString();
+			}
+
+			function getOrCreateYouTubeIframe() {
+				let ytIframe = document.getElementById('ytPlayer');
+				if (ytIframe) return ytIframe;
+
+				ytIframe = document.createElement('iframe');
+				ytIframe.id = 'ytPlayer';
+				ytIframe.style.width = '90%';
+				ytIframe.style.height = '85%';
+				ytIframe.style.border = 'none';
+				ytIframe.style.borderRadius = '12px';
+				ytIframe.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.5)';
+				ytIframe.setAttribute('allowfullscreen', '');
+				ytIframe.setAttribute('allow', 'encrypted-media; picture-in-picture');
+				iframeContainer.insertBefore(ytIframe, iframeContainer.firstChild);
+				return ytIframe;
+			}
+
+			function destroyYouTubePlayer() {
+				if (currentYoutubePlayer && typeof currentYoutubePlayer.destroy === 'function') {
+					try {
+						currentYoutubePlayer.destroy();
+					} catch (_) { }
+				}
+				currentYoutubePlayer = null;
+				const ytIframe = document.getElementById('ytPlayer');
+				if (ytIframe) ytIframe.remove();
+			}
+
+			async function ensureYouTubePlayer(startSeconds = 0) {
+				const ytIframe = document.getElementById('ytPlayer');
+				if (!ytIframe) return null;
+				const yt = await loadYouTubeIframeApi();
+
+				if (!currentYoutubePlayer) {
+					currentYoutubePlayer = new yt.Player('ytPlayer');
+				}
+
+				const start = Math.max(0, Math.floor(Number(startSeconds) || 0));
+				if (start > 0 && typeof currentYoutubePlayer.cueVideoById === 'function' && window.currentYoutubeId) {
+					currentYoutubePlayer.cueVideoById({
+						videoId: window.currentYoutubeId,
+						startSeconds: start
+					});
+				}
+				return currentYoutubePlayer;
+			}
+
+			async function getCurrentPlaybackTimeSec() {
+				if (window.currentYoutubeId && currentYoutubePlayer && typeof currentYoutubePlayer.getCurrentTime === 'function') {
+					try {
+						return Math.max(0, Math.floor(Number(currentYoutubePlayer.getCurrentTime()) || 0));
+					} catch (_) { }
+				}
+				return Math.max(0, Math.floor(Number(videoElement.currentTime) || 0));
 			}
 
 			function applyPresenceCount(count) {
@@ -1250,7 +1744,7 @@ const html = `
 			function showClipboardRestrictionHintOnce() {
 				if (localStorage.getItem(CLIPBOARD_TAP_HINT_ONCE_KEY)) return;
 				localStorage.setItem(CLIPBOARD_TAP_HINT_ONCE_KEY, '1');
-				showClipboardSoftTip('浏览器限制自动读取剪切板，请点击页面任意位置后自动重试。');
+				showClipboardSoftTip('浏览器限制自动读取剪切板，请点击页面任意位置后自动重试！');
 			}
 
 			function showClipboardSoftTip(message) {
@@ -1270,6 +1764,10 @@ const html = `
 				showClipboardSoftTip._timer = setTimeout(() => {
 					tip.classList.remove('show');
 				}, 2600);
+			}
+
+			function isClipboardAutoplaySuppressed() {
+				return !!(iframeContainer && iframeContainer.style.display === 'flex');
 			}
 
 			function extractIwaraVideoInfoFromText(text) {
@@ -1330,6 +1828,75 @@ const html = `
 				if (!confirmed) return null;
 				return qualitySelect.value || selectQuality.value || '540';
 			}
+
+			function getQualityLabel(quality) {
+				const normalized = String(quality || '');
+				if (normalized === 'Source') return '原视频';
+				if (normalized === '540') return '540P';
+				if (normalized === '360') return '360P';
+				return normalized || '当前选择';
+			}
+
+			function getAvailableQualityValues(list) {
+				const values = [];
+				for (const item of Array.isArray(list) ? list : []) {
+					const value = String(item && item.name || '').trim();
+					const viewUrl = item && item.src && item.src.view;
+					if (!value || !viewUrl || values.includes(value)) continue;
+					values.push(value);
+				}
+				return values;
+			}
+
+			function getPreferredQualityFallbacks(requestedQuality) {
+				if (requestedQuality === 'Source') return ['540', '360'];
+				if (requestedQuality === '540') return ['360', 'Source'];
+				if (requestedQuality === '360') return ['540', 'Source'];
+				return ['540', '360', 'Source'];
+			}
+
+			function pickBestAvailableQuality(requestedQuality, availableValues) {
+				const values = Array.isArray(availableValues) ? availableValues : [];
+				if (values.includes(requestedQuality)) return requestedQuality;
+				for (const candidate of getPreferredQualityFallbacks(requestedQuality)) {
+					if (values.includes(candidate)) return candidate;
+				}
+				return values[0] || '';
+			}
+
+			async function promptQualityForUnavailableSelection(requestedQuality, availableValues) {
+				const values = Array.isArray(availableValues) ? availableValues : [];
+				if (!values.length) return null;
+
+				const qualitySelect = document.createElement('select');
+				qualitySelect.style.width = '100%';
+				qualitySelect.style.padding = '8px';
+				qualitySelect.style.borderRadius = '8px';
+				qualitySelect.style.border = '1px solid #ccc';
+				qualitySelect.style.background = '#fff';
+
+				values.forEach(value => {
+					const opt = document.createElement('option');
+					opt.value = value;
+					opt.textContent = getQualityLabel(value);
+					qualitySelect.appendChild(opt);
+				});
+
+				qualitySelect.value = pickBestAvailableQuality(requestedQuality, values) || values[0];
+
+				const confirmed = await swal({
+					title: '清晰度提示',
+					text: '当前视频清晰度没有' + getQualityLabel(requestedQuality) + '，请选择视频播放的清晰度！',
+					content: qualitySelect,
+					buttons: {
+						cancel: { text: '取消', value: false, visible: true },
+						confirm: { text: '确认播放', value: true }
+					}
+				});
+
+				if (!confirmed) return null;
+				return qualitySelect.value || null;
+			}
 			async function promptPlayDetectedIwaraLink(info) {
 				if (!info || clipboardPromptHandled) return;
 				clipboardPromptHandled = true;
@@ -1351,7 +1918,11 @@ const html = `
 			}
 
 			async function autoPlayClipboardIwaraLink(fromUserGesture = false, forceAutoRetry = false) {
-				clipboardLog('autoPlay start', 'fromUserGesture=', fromUserGesture, 'force=', forceAutoRetry, 'handled=', clipboardPromptHandled);
+				clipboardLog('自动播放开始', 'fromUserGesture=', fromUserGesture, 'force=', forceAutoRetry, 'handled=', clipboardPromptHandled);
+				if (isClipboardAutoplaySuppressed()) {
+					clipboardLog('当前播放器活跃跳过！');
+					return;
+				}
 				if (clipboardPromptHandled) return;
 				if (fromUserGesture) {
 					if (clipboardGestureAttempted) return;
@@ -1363,19 +1934,19 @@ const html = `
 
 				try {
 					if (!window.isSecureContext || !navigator.clipboard || typeof navigator.clipboard.readText !== 'function') {
-						clipboardLog('clipboard api unavailable', 'secure=', window.isSecureContext, 'hasClipboard=', !!navigator.clipboard);
+						clipboardLog('剪贴板 API 不可用！', 'secure=', window.isSecureContext, 'hasClipboard=', !!navigator.clipboard);
 						return;
 					}
 					const clipboardText = String(await navigator.clipboard.readText() || '').trim();
-					clipboardLog('readText ok, length=', clipboardText.length);
+					clipboardLog('读取文本正常, 长度为', clipboardText.length);
 					const info = extractIwaraVideoInfoFromText(clipboardText);
 					if (!info) {
-						clipboardLog('not iwara link');
+						clipboardLog('没有Iwara网站链接！');
 						return;
 					}
 					await promptPlayDetectedIwaraLink(info);
 				} catch (err) {
-					clipboardLog('readText failed', err && (err.name + ': ' + err.message));
+					clipboardLog('读取文本失败！', err && (err.name + ': ' + err.message));
 					const errName = String(err && err.name || '').toLowerCase();
 					const errMsg = String(err && err.message || '').toLowerCase();
 					const autoReadDenied = !fromUserGesture && (
@@ -1395,9 +1966,13 @@ const html = `
 
 			function triggerClipboardCheckOnEntry(_reason = 'entry') {
 				clipboardLog('entry trigger', _reason, 'visibility=', document.visibilityState);
+				if (isClipboardAutoplaySuppressed()) {
+					clipboardLog('处于视频播放页面被抑制！');
+					return;
+				}
 				const now = Date.now();
 				if (now - lastClipboardEntryCheckAt < 1200) {
-					clipboardLog('skip by throttle');
+					clipboardLog('节流跳过！');
 					return;
 				}
 				lastClipboardEntryCheckAt = now;
@@ -1413,7 +1988,7 @@ const html = `
 				document.addEventListener('click', function onGestureClick() {
 					document.removeEventListener('click', onGestureClick);
 					clipboardGestureProbeActive = false;
-					clipboardLog('gesture click retry');
+					clipboardLog('手势点击重试！');
 					autoPlayClipboardIwaraLink(true);
 				});
 			}
@@ -1421,7 +1996,6 @@ const html = `
 			function bindClipboardFallbackEvents() {
 				inputVideo.addEventListener('focus', () => autoPlayClipboardIwaraLink(true), { passive: true });
 				inputVideo.addEventListener('click', () => autoPlayClipboardIwaraLink(true), { passive: true });
-
 			}
 
 			document.addEventListener('DOMContentLoaded', () => {
@@ -1574,11 +2148,8 @@ const html = `
 				document.querySelectorAll('.videoSource').forEach(src => src.onerror = null);
 
 				// 清理 YouTube iframe并恢复界面状态
-				const ytIframe = document.getElementById('ytPlayer');
-				if (ytIframe) {
-					ytIframe.src = '';
-					ytIframe.style.display = 'none';
-				}
+				destroyYouTubePlayer();
+				window.currentYoutubeId = null;
 				videoElement.style.display = '';
 				btnDownload.style.display = '';
 				btnChangeOrigin.style.display = '';
@@ -1632,7 +2203,7 @@ const html = `
 				}
 
 				if (availableOptions.length === 0) {
-					return swalAlert('没有可用的其他源', 'error', false);
+					return swalAlert('没有可用的其他源！', 'error', false);
 				}
 
 				const selectBox = document.createElement("select");
@@ -1677,7 +2248,7 @@ const html = `
 					swalAlert('已切换到 ' + selectedValue + ' 服务器播放视频!', 'success', false);
 
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
-						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
+						return swalAlert('播放链接不符合安全规则，已拦截！');
 					}
 					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
@@ -1774,9 +2345,7 @@ const html = `
 
 								// 记录当前是 YouTube 视频
 								window.currentYoutubeId = ytVideoId;
-								// 默认使用官方源
-								const ytSource = 'https://www.youtube.com/embed/';
-								const ytEmbedSrc = ytSource + ytVideoId + (ytSource.includes('?') ? '&' : '?') + 'autoplay=1';
+								const startSeconds = getStartTimeForPlayback();
 
 								// 使用 iframe 播放 YouTube 视频
 								videoElement.pause();
@@ -1785,39 +2354,53 @@ const html = `
 								btnDownload.style.display = 'none';
 								btnChangeOrigin.style.display = 'none'; // 隐藏切换源按钮
 
-								let ytIframe = document.getElementById('ytPlayer');
-								if (!ytIframe) {
-									ytIframe = document.createElement('iframe');
-									ytIframe.id = 'ytPlayer';
-									ytIframe.style.width = '90%';
-									ytIframe.style.height = '85%';
-									ytIframe.style.border = 'none';
-									ytIframe.style.borderRadius = '12px';
-									ytIframe.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.5)';
-									ytIframe.setAttribute('allowfullscreen', '');
-									ytIframe.setAttribute('allow', 'autoplay; encrypted-media');
-									iframeContainer.insertBefore(ytIframe, iframeContainer.firstChild);
-								}
-								ytIframe.src = ytEmbedSrc;
-								setPresenceVisibility(false);
-								ytIframe.style.display = 'block';
-								iframeContainer.style.display = 'flex';
+								destroyYouTubePlayer();
+						const ytIframe = getOrCreateYouTubeIframe();
+						ytIframe.src = buildYouTubeEmbedSrc(ytVideoId, startSeconds);
+						setPresenceVisibility(false);
+						ytIframe.style.display = 'block';
+						iframeContainer.style.display = 'flex';
+						loadYouTubeIframeApi()
+							.then(() => ensureYouTubePlayer(startSeconds))
+							.catch(() => { });
 
-								// 提示用户需要网络支持
-								swal({
-									title: "播放提示",
-									text: "即将播放 YouTube 视频，请确保你的网络环境可以直接访问 YouTube，否则将无法正常加载和播放。",
-									icon: "info",
-									button: "我知道了"
-								});
-								return;
-							}
+						// 提示用户需要网络支持
+						if (!isYouTubePromptDisabled()) {
+							swal({
+								title: "播放提示",
+								text: "当前视频为 YouTube 视频，请确保你的网络可以访问 YouTube，否则视频将无法正常加载和播放。此外，要修改视频清晰度请在右下角设置（齿轮图标）里自行选择！",
+								icon: "info",
+								buttons: {
+									disable: {
+										text: "不再提示",
+										value: 'disable'
+									},
+									confirm: {
+										text: "我知道了",
+										value: 'ok'
+									}
+								}
+							}).then(action => {
+								if (action === 'disable') {
+									disableYouTubePrompt();
+									swal({
+										text: '已关闭 YouTube 播放提示，后续将不再弹出！',
+										icon: 'success',
+										buttons: false,
+										timer: 2500
+									});
+								}
+							});
 						}
+						return;
+					}
+				}
 						// 既没有 file 也没有有效的 embedUrl
 						throw '该视频暂无可用播放资源（file 为空且无有效的 embedUrl）';
 					}
 
 					// 清除 YouTube 状态
+					destroyYouTubePlayer();
 					window.currentYoutubeId = null;
 
 					currentVideoName = data.title + '.' + data.file.mime.replace('video/', '');
@@ -1852,7 +2435,7 @@ const html = `
 						if (proceed === 'disable') {
 							disableSensitivePrompt();
 							swal({
-								text: '已关闭高敏感内容提示，后续将不再检测。',
+								text: '已关闭高敏感内容提示，后续将不再检测！',
 								icon: 'success',
 								buttons: false,
 								timer: 2500
@@ -1923,13 +2506,28 @@ const html = `
 						}
 					});
 					if (!res2.ok) {
-						throw '获取播放资源失败';
+						throw '获取播放资源失败！';
 					}
 					const data2 = await res2.json();
-					currentVideoUrl = 'https:' + getVideoUrlByQuality(data2, quality);
+					const availableQualityValues = getAvailableQualityValues(data2);
+					let resolvedQuality = quality;
+					let resolvedVideoPath = getVideoUrlByQuality(data2, resolvedQuality);
+					if (!resolvedVideoPath) {
+						resolvedQuality = await promptQualityForUnavailableSelection(quality, availableQualityValues);
+						if (!resolvedQuality) {
+							hideLoading();
+							return;
+						}
+						selectQuality.value = resolvedQuality;
+						resolvedVideoPath = getVideoUrlByQuality(data2, resolvedQuality);
+					}
+					if (!resolvedVideoPath) {
+						throw '当前视频暂无可用清晰度播放资源！';
+					}
+					currentVideoUrl = 'https:' + resolvedVideoPath;
 					showLoading('正在准备播放器...');
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
-						return swalAlert('\u64ad\u653e\u94fe\u63a5\u4e0d\u7b26\u5408\u5b89\u5168\u89c4\u5219\uff0c\u5df2\u62e6\u622a\u3002');
+						return swalAlert('播放链接不符合安全规则，已拦截！');
 					}
 					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
 
@@ -1986,8 +2584,8 @@ const html = `
 
 			// 根据清晰度从播放列表中选取链接
 			function getVideoUrlByQuality(list, quality) {
-				const found = list.find(item => item.name === quality);
-				return (found || list[0]).src.view;
+				const found = (Array.isArray(list) ? list : []).find(item => item && item.name === quality && item.src && item.src.view);
+				return found ? found.src.view : '';
 			}
 
 			// 显示随机热门选择
@@ -2040,7 +2638,7 @@ const html = `
 						playVideoById();
 					} else {
 						showLoading('正在获取热门视频列表...');
-						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=24", {
+						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=30", {
 							headers: {
 								'X-Site': getCurrentSiteHost()
 							}
@@ -2344,7 +2942,7 @@ const html = `
 					localStorage.removeItem('token');
 					swal({
 						title: '令牌已失效',
-						text: '检测到你之前保存的 Iwara 令牌已过期或无效，已自动清除，请重新填写令牌。',
+						text: '检测到你之前保存的 Iwara 令牌已过期或无效，已自动清除，请重新填写令牌！',
 						icon: 'warning',
 						button: '知道了'
 					});
@@ -2394,7 +2992,7 @@ const html = `
 			function saveToken() {
 				swal({
 					"title": "令牌获取方法",
-					"text": "在Iwara官网首页，PC端按“F12”，在弹出的窗口中选择“控制台”，输入“localStorage.getItem('token')”后按回车，把输出的内容复制到下方点击确定即可！",
+					"text": "有些视频需要登录令牌才能观看！在PC端访问Iwara官网，再按键盘上面的“F12”，在弹出的窗口中选择“控制台”，然后输入“localStorage.getItem('token')”（去掉双引号）后按回车，把输出的内容复制到下方点击确定即可！",
 					content: "input",
 					button: "确定"
 				})
@@ -2459,7 +3057,7 @@ const html = `
 								parsedImported = JSON.parse(String(reader.result || '{}'));
 							} catch {
 								swal({
-									text: 'JSON 格式错误，导入失败',
+									text: 'JSON 格式错误，导入失败！',
 									icon: 'error'
 								});
 								resolve();
@@ -2490,7 +3088,7 @@ const html = `
 
 						reader.onerror = () => {
 							swal({
-								text: '文件读取失败',
+								text: '文件读取失败！',
 								icon: 'error'
 							});
 							resolve();
@@ -2537,7 +3135,7 @@ const html = `
 			// 判断时间是否超过一天
 			async function copyMomentLinkToClipboard() {
 				const id = (currentPlayId || inputVideo.value.trim() || 'Hvfo6PVnB9mnsD').trim();
-				const t = Math.max(0, Math.floor(Number(videoElement.currentTime) || 0));
+				const t = await getCurrentPlaybackTimeSec();
 				const u = new URL(location.origin + location.pathname);
 				u.searchParams.set('id', id);
 				u.searchParams.set('quality', selectQuality.value);
@@ -2558,379 +3156,3 @@ const html = `
 </body>
 
 </html>`
-
-// 建议这些变量在Cloudflare Worker的面板(优先级更高)里设置，这里设置也行
-// 如果你设置了默认Iwara账号的Token，那么我强烈建议你设置访问的用户名和密码进一步保证你的账号隐私安全（虽然项目有做保护）！！！
-const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
-const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
-const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
-const BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS = 86400; // 前端请求检测后端Token有效期间隔(单位秒，默认1天，后端未设置token生效)
-
-function pickEnvOrDefault(envValue, defaultValue = '') {
-	const v = typeof envValue === 'string' ? envValue.trim() : '';
-	if (v) return v;
-	return (defaultValue || '').trim();
-}
-
-function workerConfig(env) {
-	return {
-		basicUser: pickEnvOrDefault(env?.BASIC_AUTH_USER, DEFAULT_BASIC_AUTH_USER),
-		basicPass: pickEnvOrDefault(env?.BASIC_AUTH_PASS, DEFAULT_BASIC_AUTH_PASS),
-		iwaraAuthorization: pickEnvOrDefault(env?.IWARA_AUTHORIZATION, DEFAULT_IWARA_AUTHORIZATION)
-	};
-}
-
-function unauthorizedResponse() {
-	return new Response('Authentication required', {
-		status: 401,
-		headers: {
-			'content-type': 'text/plain; charset=UTF-8',
-			'WWW-Authenticate': 'Basic realm="IwaraProxy", charset="UTF-8"'
-		}
-	});
-}
-
-function verifyBasicAuth(request, env) {
-	const cfg = workerConfig(env);
-	const enabled = !!(cfg.basicUser || cfg.basicPass);
-	if (!enabled) return null;
-
-	const auth = request.headers.get('Authorization') || '';
-	if (!auth.startsWith('Basic ')) return unauthorizedResponse();
-
-	let decoded = '';
-	try {
-		decoded = atob(auth.slice(6));
-	} catch {
-		return unauthorizedResponse();
-	}
-	const idx = decoded.indexOf(':');
-	const user = idx >= 0 ? decoded.slice(0, idx) : decoded;
-	const pass = idx >= 0 ? decoded.slice(idx + 1) : '';
-	if (user !== cfg.basicUser || pass !== cfg.basicPass) return unauthorizedResponse();
-	return null;
-}
-
-function normalizeIwaraAuthorization(value) {
-	const v = (value || '').trim();
-	if (!v) return '';
-	return /^Bearer\s+/i.test(v) ? v : ('Bearer ' + v);
-}
-
-function resolveUpstreamAuthorization(request, env) {
-	const customizedToken = (request.headers.get('CustomizedToken') || '').trim();
-	if (customizedToken) return normalizeIwaraAuthorization(customizedToken);
-	const cfg = workerConfig(env);
-	return normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
-}
-
-function buildProxyRequest(targetUrl, request, env) {
-	const headers = new Headers(request.headers);
-
-	// Never forward local Basic Auth credentials to upstream.
-	headers.delete('Authorization');
-	headers.delete('authorization');
-
-	// Remove custom frontend token header after extracting it.
-	const customizedToken = (headers.get('CustomizedToken') || headers.get('customizedtoken') || '').trim();
-	headers.delete('CustomizedToken');
-	headers.delete('customizedtoken');
-
-	const cfg = workerConfig(env);
-	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || (cfg.iwaraAuthorization || '').trim());
-	if (upstreamAuthorization) {
-		headers.set('Authorization', upstreamAuthorization);
-	}
-
-	return new Request(targetUrl, {
-		method: request.method,
-		headers,
-		body: (request.method === 'GET' || request.method === 'HEAD') ? undefined : request.body,
-		redirect: 'follow'
-	});
-}
-function decodeJwtPayload(token) {
-	try {
-		const raw = (token || '').trim().replace(/^Bearer\s+/i, '');
-		if (!raw) return null;
-		const parts = raw.split('.');
-		if (parts.length !== 3) return null;
-		const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-		const padded = base64 + '='.repeat((4 - (base64.length % 4 || 4)) % 4);
-		return JSON.parse(atob(padded));
-	} catch {
-		return null;
-	}
-}
-
-function getBackendTokenStatus(env) {
-	const cfg = workerConfig(env);
-	const token = normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
-	if (!token) return { status: 'not_configured' };
-
-	const payload = decodeJwtPayload(token);
-	if (!payload || typeof payload.exp !== 'number') {
-		return { status: 'expired' };
-	}
-	const now = Math.floor(Date.now() / 1000);
-	return payload.exp > now ? { status: 'valid' } : { status: 'expired' };
-}
-
-function isAllowedIwaraViewTarget(urlObj) {
-	const protocol = String(urlObj.protocol || '').toLowerCase();
-	const host = String(urlObj.hostname || '').toLowerCase();
-	const pathname = String(urlObj.pathname || '');
-	const query = String(urlObj.search || '');
-	const protocolOk = protocol === 'http:' || protocol === 'https:';
-	const hostOk = /^[a-z0-9-]+\.iwara\.tv$/i.test(host);
-	const pathOk = pathname === '/view';
-	const queryOk = query.length > 1;
-	return protocolOk && hostOk && pathOk && queryOk;
-}
-
-
-function isAllowedProxyMethod(method) {
-	const mth = String(method || '').toUpperCase();
-	return mth === 'GET' || mth === 'OPTIONS';
-}
-
-function isProxyPath(pathname) {
-	return pathname.startsWith('/video/') || pathname.startsWith('/videos') || pathname.startsWith('/file/') || pathname.startsWith('/view');
-}
-
-function normalizePresenceSessionId(value) {
-	const v = String(value || '').trim();
-	return /^[a-zA-Z0-9_-]{12,120}$/.test(v) ? v : '';
-}
-
-function jsonResponse(data, status = 200, extraHeaders = {}) {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: Object.assign({
-			'content-type': 'application/json;charset=UTF-8',
-			'cache-control': 'no-store'
-		}, extraHeaders)
-	});
-}
-
-function getOnlineCounterStub(env) {
-	const namespace = env && env.ONLINE_COUNTER;
-	if (!namespace || typeof namespace.idFromName !== 'function' || typeof namespace.get !== 'function') {
-		return null;
-	}
-	return namespace.get(namespace.idFromName('global-site-presence'));
-}
-
-function buildDurableObjectRequest(targetUrl, request) {
-	return new Request(targetUrl, request);
-}
-
-function getSocketSessionId(socket) {
-	try {
-		const attachment = socket.deserializeAttachment();
-		return normalizePresenceSessionId(attachment && attachment.sessionId);
-	} catch {
-		return '';
-	}
-}
-
-function countUniquePresenceSessions(sockets) {
-	const sessionIds = new Set();
-	for (const socket of sockets || []) {
-		const sessionId = getSocketSessionId(socket);
-		if (sessionId) sessionIds.add(sessionId);
-	}
-	return sessionIds.size;
-}
-
-function createPresencePayload(online) {
-	return JSON.stringify({
-		type: 'site_online_count',
-		online: Math.max(0, Number(online) || 0),
-		ts: Date.now()
-	});
-}
-
-export class OnlineCounterDurableObject {
-	constructor(state, env) {
-		this.state = state;
-		this.env = env;
-	}
-
-	getOnlineCount() {
-		return countUniquePresenceSessions(this.state.getWebSockets());
-	}
-
-	broadcastOnlineCount() {
-		const payload = createPresencePayload(this.getOnlineCount());
-		for (const socket of this.state.getWebSockets()) {
-			try {
-				socket.send(payload);
-			} catch (_) { }
-		}
-	}
-
-	closeDuplicateSessions(sessionId, keepSocket = null) {
-		for (const socket of this.state.getWebSockets()) {
-			if (socket === keepSocket) continue;
-			if (getSocketSessionId(socket) !== sessionId) continue;
-			try {
-				socket.close(1000, 'session replaced');
-			} catch (_) { }
-		}
-	}
-
-	async fetch(request) {
-		const url = new URL(request.url);
-		if (url.pathname === '/count') {
-			return jsonResponse({ online: this.getOnlineCount() });
-		}
-
-		const upgradeHeader = request.headers.get('Upgrade') || '';
-		if (upgradeHeader.toLowerCase() !== 'websocket') {
-			return jsonResponse({ error: 'Expected websocket upgrade request' }, 426, { 'upgrade': 'websocket' });
-		}
-
-		const sessionId = normalizePresenceSessionId(url.searchParams.get('sid'));
-		if (!sessionId) {
-			return jsonResponse({ error: '缺少有效的会话标识' }, 400);
-		}
-
-		const webSocketPair = new WebSocketPair();
-		const clientSocket = webSocketPair[0];
-		const serverSocket = webSocketPair[1];
-
-		this.closeDuplicateSessions(sessionId);
-		this.state.acceptWebSocket(serverSocket);
-		serverSocket.serializeAttachment({ sessionId });
-
-		this.broadcastOnlineCount();
-		return new Response(null, {
-			status: 101,
-			webSocket: clientSocket
-		});
-	}
-
-	webSocketMessage(ws, message) {
-		if (String(message || '').trim().toLowerCase() === 'ping') {
-			try {
-				ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
-			} catch (_) { }
-		}
-	}
-
-	webSocketClose() {
-		this.broadcastOnlineCount();
-	}
-
-	webSocketError(ws) {
-		try {
-			ws.close(1011, 'socket error');
-		} catch (_) { }
-		this.broadcastOnlineCount();
-	}
-}
-
-export default {
-	async fetch(request, env) {
-		const authFailed = verifyBasicAuth(request, env);
-		if (authFailed) return authFailed;
-
-		let url = new URL(request.url);
-		if (isProxyPath(url.pathname) && !isAllowedProxyMethod(request.method)) {
-			return new Response(JSON.stringify({ error: '仅允许代理GET和OPTIONS请求' }), {
-				status: 403,
-				headers: { 'content-type': 'application/json;charset=UTF-8', 'allow': 'GET, OPTIONS' }
-			});
-		}
-		if (isProxyPath(url.pathname) && String(request.method || '').toUpperCase() === 'OPTIONS') {
-			return new Response(null, {
-				status: 204,
-				headers: {
-					'allow': 'GET, OPTIONS',
-					'access-control-allow-methods': 'GET, OPTIONS',
-					'access-control-allow-origin': '*',
-					'access-control-allow-headers': 'Content-Type, CustomizedToken, X-Version, Range'
-				}
-			});
-		}
-
-		if (url.pathname === '/token-status') {
-			const status = getBackendTokenStatus(env);
-			if (status.status === 'not_configured') {
-				return new Response(null, {
-					status: 204,
-					headers: { 'Retry-After': String(BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS) }
-				});
-			}
-			if (status.status === 'valid') {
-				return new Response(null, { status: 204 });
-			}
-			return new Response(JSON.stringify({ code: 'backend_token_expired', message: '后端设置的token已过期！' }), {
-				status: 200,
-				headers: { 'content-type': 'application/json;charset=UTF-8' }
-			});
-		} else if (url.pathname === '/online-count' || url.pathname === '/online-presence') {
-			const counterStub = getOnlineCounterStub(env);
-			if (!counterStub) {
-				return jsonResponse({ error: 'ONLINE_COUNTER Durable Object 未绑定' }, 503);
-			}
-
-			const targetUrl = new URL(request.url);
-			targetUrl.pathname = url.pathname === '/online-count' ? '/count' : '/ws';
-			targetUrl.search = url.search;
-			return counterStub.fetch(buildDurableObjectRequest(targetUrl.toString(), request));
-		} else if (url.pathname === '/') {
-			return new Response(html, {
-				headers: {
-					"content-type": "text/html;charset=UTF-8",
-				},
-			});
-		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
-			url.hostname = 'apiq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env));
-		} else if (url.pathname.startsWith('/view')) {
-			let finUrl = url.searchParams.get('url');
-			if (!finUrl) {
-				return new Response('{"error":"缺少url参数值"}', {
-					status: 400,
-					headers: { "content-type": "application/json;charset=UTF-8" }
-				});
-			}
-
-			let decoded;
-			try {
-				decoded = decodeURIComponent(finUrl);
-			} catch {
-				return new Response('{"error":"url参数格式错误"}', {
-					status: 400,
-					headers: { "content-type": "application/json;charset=UTF-8" }
-				});
-			}
-
-			let urlObj;
-			try {
-				urlObj = new URL(decoded);
-			} catch {
-				return new Response('{"error":"url参数格式错误"}', {
-					status: 400,
-					headers: { "content-type": "application/json;charset=UTF-8" }
-				});
-			}
-
-			if (!isAllowedIwaraViewTarget(urlObj)) {
-				return new Response('{"error":"请勿滥用接口"}', {
-					status: 403,
-					headers: { "content-type": "application/json;charset=UTF-8" },
-				});
-			}
-			return fetch(buildProxyRequest(decoded, request, env));
-		} else if (url.pathname.startsWith('/file/')) {
-			url.hostname = 'filesq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env));
-		}
-		return env.ASSETS.fetch(request);
-	}
-
-};
-

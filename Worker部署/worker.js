@@ -6,7 +6,13 @@
 const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
 const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
 const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
+const DEFAULT_NOTICE_API_URL = ''; // 设置通知接口URL
+const DEFAULT_NEW_SITE_URL = ''; // 设置请求数接近免费计划上限时引导访问的新网站
 const BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS = 86400; // 前端请求检测后端Token有效期间隔(单位秒，默认1天，后端未设置token生效)
+const WORKERS_FREE_DAILY_REQUEST_LIMIT = 100000; // Cloudflare Workers Free 每日请求数限制
+const DIRECT_MODE_REMAINING_REQUESTS_THRESHOLD = 100; // 当日剩余请求数低于等于该值时，新会话切换到直连模式
+const PLAYBACK_MODE_CACHE_TTL_SECONDS = 300; // 播放模式决策缓存时长（秒）
+const NOTICE_API_CACHE_TTL_SECONDS = 300; // 通知接口缓存时长（秒）
 const IWARA_LOGIN_URL = 'https://api.iwara.tv/user/login';
 const IWARA_LOGIN_RETRY_COOLDOWN_MS = 60000;
 const IWARA_TOKEN_REFRESH_SKEW_SECONDS = 60;
@@ -15,11 +21,36 @@ let cachedAutoIwaraAuthorization = '';
 let iwaraLoginPromise = null;
 let iwaraLoginRetryAfter = 0;
 let lastIwaraLoginError = null;
+let lastIwaraLoginAttemptAt = '';
+let lastIwaraLoginResponseStatus = null;
+let lastIwaraLoginResponseContentType = '';
+let lastIwaraLoginSucceededAt = '';
 
 function pickEnvOrDefault(envValue, defaultValue = '') {
 	const v = typeof envValue === 'string' ? envValue.trim() : '';
 	if (v) return v;
 	return (defaultValue || '').trim();
+}
+
+function normalizeHttpUrl(value) {
+	const raw = String(value || '').trim();
+	if (!raw) return '';
+	try {
+		const url = new URL(raw);
+		if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
+		return url.toString();
+	} catch (_) {
+		return '';
+	}
+}
+
+function getUrlDisplayName(url) {
+	if (!url) return '';
+	try {
+		return new URL(url).host;
+	} catch (_) {
+		return String(url || '').trim();
+	}
 }
 
 function workerConfig(env) {
@@ -29,6 +60,35 @@ function workerConfig(env) {
 		iwaraAuthorization: pickEnvOrDefault(env?.IWARA_AUTHORIZATION, DEFAULT_IWARA_AUTHORIZATION),
 		iwaraUsername: pickEnvOrDefault(env?.IWARA_USERNAME),
 		iwaraPassword: typeof env?.IWARA_PASSWORD === 'string' ? env.IWARA_PASSWORD : ''
+	};
+}
+
+function sanitizePlaybackMode(value) {
+	return String(value || '').trim().toLowerCase() === 'direct' ? 'direct' : 'proxy';
+}
+
+function getPlaybackModeConfig(env) {
+	const dailyLimitValue = Number.parseInt(pickEnvOrDefault(env?.WORKERS_DAILY_REQUEST_LIMIT, String(WORKERS_FREE_DAILY_REQUEST_LIMIT)), 10);
+	const thresholdValue = Number.parseInt(pickEnvOrDefault(env?.DIRECT_MODE_REMAINING_REQUESTS_THRESHOLD, String(DIRECT_MODE_REMAINING_REQUESTS_THRESHOLD)), 10);
+	const ttlValue = Number.parseInt(pickEnvOrDefault(env?.PLAYBACK_MODE_CACHE_TTL_SECONDS, String(PLAYBACK_MODE_CACHE_TTL_SECONDS)), 10);
+	return {
+		manualMode: sanitizePlaybackMode(pickEnvOrDefault(env?.FORCE_PLAYBACK_MODE, 'proxy')),
+		manualModeRaw: pickEnvOrDefault(env?.FORCE_PLAYBACK_MODE, ''),
+		accountTag: pickEnvOrDefault(env?.CF_ACCOUNT_TAG, ''),
+		apiToken: pickEnvOrDefault(env?.CF_ANALYTICS_API_TOKEN, ''),
+		scriptName: pickEnvOrDefault(env?.CF_WORKER_SCRIPT_NAME, ''),
+		newSiteUrl: normalizeHttpUrl(pickEnvOrDefault(env?.NEW_SITE_URL, DEFAULT_NEW_SITE_URL)),
+		dailyLimit: Number.isFinite(dailyLimitValue) && dailyLimitValue > 0 ? dailyLimitValue : WORKERS_FREE_DAILY_REQUEST_LIMIT,
+		remainingThreshold: Number.isFinite(thresholdValue) && thresholdValue >= 0 ? thresholdValue : DIRECT_MODE_REMAINING_REQUESTS_THRESHOLD,
+		cacheTtlSeconds: Number.isFinite(ttlValue) && ttlValue > 0 ? ttlValue : PLAYBACK_MODE_CACHE_TTL_SECONDS
+	};
+}
+
+function getNoticeConfig(env) {
+	const ttlValue = Number.parseInt(pickEnvOrDefault(env?.NOTICE_API_CACHE_TTL_SECONDS, String(NOTICE_API_CACHE_TTL_SECONDS)), 10);
+	return {
+		apiUrl: normalizeHttpUrl(pickEnvOrDefault(env?.NOTICE_API_URL, DEFAULT_NOTICE_API_URL)),
+		cacheTtlSeconds: Number.isFinite(ttlValue) && ttlValue > 0 ? ttlValue : NOTICE_API_CACHE_TTL_SECONDS
 	};
 }
 
@@ -135,6 +195,59 @@ function invalidateAutoIwaraAuthorization() {
 	cachedAutoIwaraAuthorization = '';
 }
 
+function safeIwaraLoginErrorMessage(error = lastIwaraLoginError) {
+	return String(error?.message || error || '')
+		.replace(/[\r\n\t]+/g, ' ')
+		.trim()
+		.slice(0, 300);
+}
+
+function logIwaraLoginEvent(level, event, details = {}) {
+	const message = JSON.stringify({ event, ...details });
+	if (level === 'warn') console.warn('[iwara-auto-login]', message);
+	else console.info('[iwara-auto-login]', message);
+}
+
+function getAuthorizationExpiry(authorization) {
+	const payload = decodeJwtPayload(authorization);
+	if (!payload || typeof payload.exp !== 'number') return null;
+	const date = new Date(payload.exp * 1000);
+	return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function getIwaraLoginDiagnostics(env, backendStatus) {
+	const cfg = workerConfig(env);
+	const configuredAuthorization = normalizeIwaraAuthorization(cfg.iwaraAuthorization);
+	const configuredTokenIsFresh = isIwaraAuthorizationFresh(configuredAuthorization, 0);
+	const cachedTokenIsFresh = isIwaraAuthorizationFresh(cachedAutoIwaraAuthorization, 0);
+	const retryAfterSeconds = Math.max(0, Math.ceil((iwaraLoginRetryAfter - Date.now()) / 1000));
+
+	return {
+		status: backendStatus?.status || 'unknown',
+		configured: {
+			manualToken: !!configuredAuthorization,
+			username: !!cfg.iwaraUsername,
+			password: !!cfg.iwaraPassword
+		},
+		authorizationSource: configuredTokenIsFresh
+			? 'configured_token'
+			: (cachedTokenIsFresh ? 'auto_login_cache' : 'none'),
+		autoLogin: {
+			endpoint: IWARA_LOGIN_URL,
+			attempted: !!lastIwaraLoginAttemptAt,
+			lastAttemptAt: lastIwaraLoginAttemptAt || null,
+			lastResponseStatus: lastIwaraLoginResponseStatus,
+			lastResponseContentType: lastIwaraLoginResponseContentType || null,
+			lastSucceededAt: lastIwaraLoginSucceededAt || null,
+			cachedTokenAvailable: cachedTokenIsFresh,
+			cachedTokenExpiresAt: getAuthorizationExpiry(cachedAutoIwaraAuthorization),
+			loginInFlight: !!iwaraLoginPromise,
+			retryAfterSeconds,
+			lastError: safeIwaraLoginErrorMessage() || null
+		}
+	};
+}
+
 async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 	const cfg = workerConfig(env);
 	if (!hasIwaraLoginCredentials(cfg)) {
@@ -152,6 +265,15 @@ async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 	if (forceRefresh) invalidateAutoIwaraAuthorization();
 	const currentPromise = (async () => {
 		try {
+			lastIwaraLoginAttemptAt = new Date().toISOString();
+			lastIwaraLoginResponseStatus = null;
+			lastIwaraLoginResponseContentType = '';
+			logIwaraLoginEvent('info', 'request_started', {
+				endpoint: IWARA_LOGIN_URL,
+				forceRefresh: !!forceRefresh,
+				hasUsername: !!cfg.iwaraUsername,
+				hasPassword: !!cfg.iwaraPassword
+			});
 			const response = await fetch(IWARA_LOGIN_URL, {
 				method: 'POST',
 				headers: {
@@ -159,7 +281,15 @@ async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 					'Accept-Language': 'zh-CN,zh;q=0.9',
 					'Content-Type': 'application/json',
 					'Origin': 'https://www.iwara.tv',
+					'Priority': 'u=1, i',
 					'Referer': 'https://www.iwara.tv/',
+					'Sec-CH-UA': '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
+					'Sec-CH-UA-Mobile': '?0',
+					'Sec-CH-UA-Platform': '"Windows"',
+					'Sec-Fetch-Dest': 'empty',
+					'Sec-Fetch-Mode': 'cors',
+					'Sec-Fetch-Site': 'same-site',
+					'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36',
 					'X-Site': 'www.iwara.tv'
 				},
 				body: JSON.stringify({
@@ -167,9 +297,19 @@ async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 					password: cfg.iwaraPassword
 				})
 			});
+			lastIwaraLoginResponseStatus = response.status;
+			lastIwaraLoginResponseContentType = (response.headers.get('content-type') || '').slice(0, 200);
+			logIwaraLoginEvent('info', 'response_received', {
+				status: response.status,
+				ok: response.ok,
+				contentType: lastIwaraLoginResponseContentType || null
+			});
 
 			if (!response.ok) {
-				throw new Error('Iwara登录接口返回HTTP ' + response.status);
+				const contentType = lastIwaraLoginResponseContentType
+					? '（' + lastIwaraLoginResponseContentType + '）'
+					: '';
+				throw new Error('Iwara登录接口返回HTTP ' + response.status + contentType);
 			}
 			const data = await response.json().catch(() => null);
 			const authorization = normalizeIwaraAuthorization(data && data.token);
@@ -180,11 +320,20 @@ async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 			cachedAutoIwaraAuthorization = authorization;
 			iwaraLoginRetryAfter = 0;
 			lastIwaraLoginError = null;
+			lastIwaraLoginSucceededAt = new Date().toISOString();
+			logIwaraLoginEvent('info', 'login_succeeded', {
+				tokenType: decodeJwtPayload(authorization) ? 'jwt' : 'opaque',
+				tokenExpiresAt: getAuthorizationExpiry(authorization)
+			});
 			return authorization;
 		} catch (error) {
 			invalidateAutoIwaraAuthorization();
 			iwaraLoginRetryAfter = Date.now() + IWARA_LOGIN_RETRY_COOLDOWN_MS;
 			lastIwaraLoginError = error instanceof Error ? error : new Error(String(error));
+			logIwaraLoginEvent('warn', 'login_failed', {
+				error: safeIwaraLoginErrorMessage(lastIwaraLoginError),
+				retryAfterSeconds: Math.ceil(IWARA_LOGIN_RETRY_COOLDOWN_MS / 1000)
+			});
 			throw lastIwaraLoginError;
 		}
 	})();
@@ -254,6 +403,278 @@ async function getBackendTokenStatus(env) {
 	}
 	const now = Math.floor(Date.now() / 1000);
 	return payload.exp > now ? { status: 'valid' } : { status: 'expired' };
+}
+
+function buildDirectModeNotice(newSiteUrl) {
+	const baseNotice = '今日 Worker 请求量已接近配置上限，新打开的页面已切换为视频直连模式。若当前网络无法直接访问 Iwara 视频源，请稍后重试；免费额度将在北京时间早上 8 点（UTC 0 点）重置。';
+	if (!newSiteUrl) return baseNotice;
+	const siteName = getUrlDisplayName(newSiteUrl);
+	return baseNotice + (siteName ? ` 也可以前往备用站点 ${siteName} 继续观看。` : ' 也可以前往备用站点继续观看。');
+}
+
+function getUtcDayRange(now = new Date()) {
+	const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
+	return {
+		dayKey: start.toISOString().slice(0, 10),
+		startIso: start.toISOString(),
+		nowIso: now.toISOString()
+	};
+}
+
+function buildPlaybackModeCacheKey(scriptName, dayKey) {
+	return new Request(`https://playback-mode-cache.internal/${encodeURIComponent(scriptName || 'default')}?day=${encodeURIComponent(dayKey)}`);
+}
+
+function buildNoticeCacheKey(apiUrl) {
+	return new Request(`https://notice-cache.internal/?url=${encodeURIComponent(apiUrl || '')}`);
+}
+
+function normalizeNoticeBootstrap(data) {
+	return {
+		hasNotice: !!(data && data.hasNotice),
+		title: String(data && data.title || '通知').slice(0, 200),
+		content: String(data && data.content || '').slice(0, 20000),
+		showOnce: !!(data && data.showOnce),
+		noticeId: String(data && data.noticeId || '').slice(0, 200),
+		checkedAt: new Date().toISOString()
+	};
+}
+
+async function queryWorkerRequestsToday(config) {
+	const range = getUtcDayRange();
+	const query = `query GetWorkersAnalytics($accountTag: string, $datetimeStart: string, $datetimeEnd: string, $scriptName: string) {
+		viewer {
+			accounts(filter: { accountTag: $accountTag }) {
+				workersInvocationsAdaptive(limit: 100, filter: {
+					scriptName: $scriptName,
+					datetime_geq: $datetimeStart,
+					datetime_leq: $datetimeEnd
+				}) {
+					sum { requests }
+				}
+			}
+		}
+	}`;
+	const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+		method: 'POST',
+		headers: {
+			'Authorization': `Bearer ${config.apiToken}`,
+			'Content-Type': 'application/json',
+			'Accept': 'application/json'
+		},
+		body: JSON.stringify({
+			query,
+			variables: {
+				accountTag: config.accountTag,
+				datetimeStart: range.startIso,
+				datetimeEnd: range.nowIso,
+				scriptName: config.scriptName
+			}
+		})
+	});
+	if (!response.ok) {
+		throw new Error(`Cloudflare Analytics API 返回状态异常：${response.status}`);
+	}
+	const result = await response.json().catch(() => null);
+	const apiErrors = Array.isArray(result?.errors) ? result.errors : [];
+	if (apiErrors.length > 0) {
+		throw new Error(apiErrors[0]?.message || 'Cloudflare Analytics API 返回错误');
+	}
+	const rows = result?.data?.viewer?.accounts?.[0]?.workersInvocationsAdaptive;
+	if (!Array.isArray(rows)) {
+		throw new Error('Cloudflare Analytics API 未返回有效的请求数据');
+	}
+	const requests = rows.reduce((total, row) => total + Number(row?.sum?.requests || 0), 0);
+	if (!Number.isFinite(requests) || requests < 0) {
+		throw new Error('Cloudflare Analytics API 未返回有效的请求数');
+	}
+	return { requests, checkedAt: range.nowIso, dayKey: range.dayKey };
+}
+
+async function getPlaybackModeBootstrap(env, options = {}) {
+	const config = getPlaybackModeConfig(env);
+	const checkedAt = new Date().toISOString();
+	const bypassCache = !!options.bypassCache;
+	if (config.manualModeRaw) {
+		return {
+			mode: config.manualMode,
+			source: 'manual_override',
+			requestLimit: config.dailyLimit,
+			remainingThreshold: config.remainingThreshold,
+			estimatedUsedRequests: null,
+			estimatedRemainingRequests: null,
+			checkedAt,
+			notice: config.manualMode === 'direct' ? buildDirectModeNotice(config.newSiteUrl) : '',
+			newSiteUrl: config.manualMode === 'direct' ? config.newSiteUrl : ''
+		};
+	}
+	if (!config.accountTag || !config.apiToken || !config.scriptName) {
+		return {
+			mode: 'proxy',
+			source: 'analytics_not_configured',
+			requestLimit: config.dailyLimit,
+			remainingThreshold: config.remainingThreshold,
+			estimatedUsedRequests: null,
+			estimatedRemainingRequests: null,
+			checkedAt,
+			notice: '',
+			newSiteUrl: ''
+		};
+	}
+
+	const range = getUtcDayRange();
+	const cacheKey = buildPlaybackModeCacheKey(config.scriptName, range.dayKey);
+	if (!bypassCache) {
+		try {
+			const cached = await caches.default.match(cacheKey);
+			if (cached) {
+				const data = await cached.json().catch(() => null);
+				if (data && (data.mode === 'proxy' || data.mode === 'direct')) {
+					return Object.assign({}, data, {
+						cacheHit: true,
+						notice: data.mode === 'direct' ? buildDirectModeNotice(config.newSiteUrl) : '',
+						newSiteUrl: data.mode === 'direct' ? config.newSiteUrl : ''
+					});
+				}
+			}
+		} catch (_) { }
+	}
+
+	try {
+		const usage = await queryWorkerRequestsToday(config);
+		const estimatedRemainingRequests = Math.max(0, config.dailyLimit - usage.requests);
+		const mode = estimatedRemainingRequests <= config.remainingThreshold ? 'direct' : 'proxy';
+		const payload = {
+			mode,
+			source: 'cloudflare_graphql_analytics',
+			requestLimit: config.dailyLimit,
+			remainingThreshold: config.remainingThreshold,
+			estimatedUsedRequests: usage.requests,
+			estimatedRemainingRequests,
+			checkedAt: usage.checkedAt,
+			notice: mode === 'direct' ? buildDirectModeNotice(config.newSiteUrl) : '',
+			newSiteUrl: mode === 'direct' ? config.newSiteUrl : '',
+			cacheHit: false
+		};
+		try {
+			await caches.default.put(cacheKey, new Response(JSON.stringify(payload), {
+				headers: {
+					'content-type': 'application/json;charset=UTF-8',
+					'cache-control': `public, max-age=${config.cacheTtlSeconds}`
+				}
+			}));
+		} catch (_) { }
+		return payload;
+	} catch (error) {
+		return {
+			mode: 'proxy',
+			source: 'analytics_error',
+			requestLimit: config.dailyLimit,
+			remainingThreshold: config.remainingThreshold,
+			estimatedUsedRequests: null,
+			estimatedRemainingRequests: null,
+			checkedAt,
+			notice: '',
+			newSiteUrl: '',
+			cacheHit: false,
+			error: error instanceof Error ? error.message : String(error || 'unknown_error')
+		};
+	}
+}
+
+async function getPlaybackModeDebugInfo(env, options = {}) {
+	const config = getPlaybackModeConfig(env);
+	const modeState = await getPlaybackModeBootstrap(env, options);
+	const missingConfig = [];
+	if (!config.accountTag) missingConfig.push('CF_ACCOUNT_TAG');
+	if (!config.apiToken) missingConfig.push('CF_ANALYTICS_API_TOKEN');
+	if (!config.scriptName) missingConfig.push('CF_WORKER_SCRIPT_NAME');
+	return {
+		mode: modeState.mode,
+		source: modeState.source,
+		cacheHit: !!modeState.cacheHit,
+		bypassCache: !!options.bypassCache,
+		requestLimit: modeState.requestLimit,
+		remainingThreshold: modeState.remainingThreshold,
+		estimatedUsedRequests: modeState.estimatedUsedRequests,
+		estimatedRemainingRequests: modeState.estimatedRemainingRequests,
+		checkedAt: modeState.checkedAt,
+		notice: modeState.notice || '',
+		error: modeState.error || '',
+		config: {
+			manualModeRaw: config.manualModeRaw,
+			manualMode: config.manualMode,
+			hasAccountTag: !!config.accountTag,
+			scriptName: config.scriptName,
+			newSiteUrl: config.newSiteUrl,
+			hasApiToken: !!config.apiToken,
+			dailyLimit: config.dailyLimit,
+			remainingThreshold: config.remainingThreshold,
+			cacheTtlSeconds: config.cacheTtlSeconds,
+			missingConfig
+		},
+		utcDayRange: getUtcDayRange()
+	};
+}
+
+async function getNoticeBootstrap(env) {
+	const config = getNoticeConfig(env);
+	if (!config.apiUrl) return normalizeNoticeBootstrap({ hasNotice: false });
+
+	const cacheKey = buildNoticeCacheKey(config.apiUrl);
+	try {
+		const cached = await caches.default.match(cacheKey);
+		if (cached) {
+			const data = await cached.json().catch(() => null);
+			if (data && typeof data === 'object') return normalizeNoticeBootstrap(data);
+		}
+	} catch (_) { }
+
+	try {
+		const response = await fetch(config.apiUrl, { headers: { 'Accept': 'application/json' } });
+		if (!response.ok) throw new Error(`通知接口返回状态异常：${response.status}`);
+		const data = normalizeNoticeBootstrap(await response.json().catch(() => null));
+		try {
+			await caches.default.put(cacheKey, new Response(JSON.stringify(data), {
+				headers: {
+					'content-type': 'application/json;charset=UTF-8',
+					'cache-control': `public, max-age=${config.cacheTtlSeconds}`
+				}
+			}));
+		} catch (_) { }
+		return data;
+	} catch (_) {
+		return normalizeNoticeBootstrap({ hasNotice: false });
+	}
+}
+
+function serializeForInlineScript(value) {
+	return JSON.stringify(value)
+		.replace(/</g, '\\u003c')
+		.replace(/>/g, '\\u003e')
+		.replace(/&/g, '\\u0026')
+		.replace(/\u2028/g, '\\u2028')
+		.replace(/\u2029/g, '\\u2029');
+}
+
+async function renderHtml(env) {
+	const [backendTokenStatus, playbackMode, noticeState] = await Promise.all([
+		getBackendTokenStatus(env),
+		getPlaybackModeBootstrap(env),
+		getNoticeBootstrap(env)
+	]);
+	const retryAfterSeconds = backendTokenStatus.status === 'not_configured'
+		? BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS
+		: (backendTokenStatus.status === 'login_failed' || backendTokenStatus.status === 'login_misconfigured' ? 60 : 0);
+	const bootstrapPayload = {
+		status: backendTokenStatus.status,
+		retryAfterSeconds
+	};
+	return html
+		.replace('__ONLINE_PRESENCE_ENABLED__', getOnlineCounterStub(env) ? 'true' : 'false')
+		.replace('"__BACKEND_TOKEN_STATUS_BOOTSTRAP__"', serializeForInlineScript(bootstrapPayload))
+		.replace('"__PLAYBACK_MODE_BOOTSTRAP__"', serializeForInlineScript(playbackMode))
+		.replace('"__NOTICE_BOOTSTRAP__"', serializeForInlineScript(noticeState));
 }
 
 function isAllowedIwaraViewTarget(urlObj) {
@@ -437,6 +858,11 @@ export default {
 
 		if (url.pathname === '/token-status') {
 			const status = await getBackendTokenStatus(env);
+			if (url.searchParams.get('debug') === '1') {
+				return jsonResponse(getIwaraLoginDiagnostics(env, status), 200, {
+					'cache-control': 'no-store'
+				});
+			}
 			if (status.status === 'not_configured') {
 				return new Response(null, {
 					status: 204,
@@ -472,11 +898,16 @@ export default {
 			targetUrl.pathname = url.pathname === '/online-count' ? '/count' : '/ws';
 			targetUrl.search = url.search;
 			return counterStub.fetch(buildDurableObjectRequest(targetUrl.toString(), request));
+		} else if (url.pathname === '/playback-mode-debug') {
+			const cfg = workerConfig(env);
+			const basicAuthEnabled = !!(cfg.basicUser || cfg.basicPass);
+			const bypassCache = basicAuthEnabled && url.searchParams.get('refresh') === '1';
+			return jsonResponse(await getPlaybackModeDebugInfo(env, { bypassCache }));
 		} else if (url.pathname === '/') {
-			const page = html.replace('__ONLINE_PRESENCE_ENABLED__', getOnlineCounterStub(env) ? 'true' : 'false');
-			return new Response(page, {
+			return new Response(await renderHtml(env), {
 				headers: {
 					"content-type": "text/html;charset=UTF-8",
+					"cache-control": "no-store",
 				},
 			});
 		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
@@ -1451,6 +1882,10 @@ const html = `
 			const saveContainer = q('#saveVideos');
 			const onlinePresenceCard = q('#onlinePresenceCard');
 			const onlineCountValue = q('#onlineCountValue');
+			const INITIAL_BACKEND_TOKEN_STATUS = "__BACKEND_TOKEN_STATUS_BOOTSTRAP__";
+			const INITIAL_PLAYBACK_MODE = "__PLAYBACK_MODE_BOOTSTRAP__";
+			const INITIAL_NOTICE = "__NOTICE_BOOTSTRAP__";
+			const BACKEND_TOKEN_STATUS_DEFAULT_RETRY_SECONDS = 86400;
 
 			let currentPlayId = '',
 				currentVideoName = '',
@@ -1464,14 +1899,24 @@ const html = `
 			const ONLINE_RECONNECT_MIN_DELAY_MS = 1500;
 			const ONLINE_RECONNECT_MAX_DELAY_MS = 12000;
 			const ONLINE_STALE_AFTER_MS = 30000;
+			const ONLINE_LAZY_CONNECT_DELAY_MS = 8000;
+			const PRESENCE_ACTIVATION_EVENTS = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
 			const SENSITIVE_PROMPT_DISABLED_KEY = 'sensitive_prompt_disabled_v1';
 			const YOUTUBE_PROMPT_DISABLED_KEY = 'youtube_prompt_disabled_v1';
+			const INTRO_PROMPT_DISABLED_KEY = 'intro_prompt_disabled_v1';
+			const NOTICE_LAST_DAILY_ID_KEY = 'site_notice_daily_last_id_v1';
+			const NOTICE_LAST_DAILY_DAY_KEY = 'site_notice_daily_last_day_v1';
+			const NOTICE_LAST_ONCE_ID_KEY = 'site_notice_once_last_id_v1';
+			const NOTICE_DISABLED_ID_KEY = 'site_notice_disabled_id_v1';
 			const presenceSessionId = ONLINE_PRESENCE_ENABLED ? getOrCreatePresenceSessionId() : '';
 			let presenceSocket = null;
 			let presenceReconnectTimer = 0;
 			let presenceReconnectAttempts = 0;
 			let presenceLastCountAt = 0;
 			let presenceClosedByClient = false;
+			let presenceActivated = false;
+			let presenceActivationTimer = 0;
+			let presenceActivationEventsBound = false;
 
 			const swalAlert = (text, icon = 'error', button = '关闭') => swal({ text, icon, button });
 			const loadingMask = q('#loadingMask');
@@ -1542,6 +1987,20 @@ const html = `
 			function disableYouTubePrompt() {
 				try {
 					localStorage.setItem(YOUTUBE_PROMPT_DISABLED_KEY, '1');
+				} catch (_) { }
+			}
+
+			function isIntroPromptDisabled() {
+				try {
+					return localStorage.getItem(INTRO_PROMPT_DISABLED_KEY) === '1';
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function disableIntroPrompt() {
+				try {
+					localStorage.setItem(INTRO_PROMPT_DISABLED_KEY, '1');
 				} catch (_) { }
 			}
 
@@ -1644,6 +2103,170 @@ const html = `
 				return Math.max(0, Math.floor(Number(videoElement.currentTime) || 0));
 			}
 
+			function getPlaybackModeState() {
+				if (INITIAL_PLAYBACK_MODE && typeof INITIAL_PLAYBACK_MODE === 'object') {
+					return INITIAL_PLAYBACK_MODE;
+				}
+				return { mode: 'proxy', source: 'bootstrap_missing' };
+			}
+
+			function getInitialNoticeState() {
+				if (INITIAL_NOTICE && typeof INITIAL_NOTICE === 'object') return INITIAL_NOTICE;
+				return {
+					hasNotice: false,
+					title: '通知',
+					content: '',
+					showOnce: false,
+					noticeId: ''
+				};
+			}
+
+			function getNoticeIdentity(notice) {
+				const noticeId = String(notice && notice.noticeId || '').trim();
+				if (noticeId) return noticeId;
+				return 'fallback:' + String(notice && notice.title || '') + '|' + String(notice && notice.content || '');
+			}
+
+			function getLocalDayKey() {
+				const now = new Date();
+				const year = now.getFullYear();
+				const month = String(now.getMonth() + 1).padStart(2, '0');
+				const day = String(now.getDate()).padStart(2, '0');
+				return year + '-' + month + '-' + day;
+			}
+
+			function hasShownNoticeOnce(identity) {
+				if (!identity) return false;
+				try {
+					return localStorage.getItem(NOTICE_LAST_ONCE_ID_KEY) === identity;
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function hasShownNoticeToday(identity) {
+				if (!identity) return false;
+				try {
+					return localStorage.getItem(NOTICE_LAST_DAILY_ID_KEY) === identity
+						&& localStorage.getItem(NOTICE_LAST_DAILY_DAY_KEY) === getLocalDayKey();
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function isNoticeDisabled(identity) {
+				if (!identity) return false;
+				try {
+					return localStorage.getItem(NOTICE_DISABLED_ID_KEY) === identity;
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function markNoticeShown(notice, identity) {
+				if (!identity) return;
+				try {
+					localStorage.setItem(NOTICE_LAST_DAILY_ID_KEY, identity);
+					localStorage.setItem(NOTICE_LAST_DAILY_DAY_KEY, getLocalDayKey());
+					if (notice && notice.showOnce) localStorage.setItem(NOTICE_LAST_ONCE_ID_KEY, identity);
+				} catch (_) { }
+			}
+
+			function disableNotice(identity) {
+				if (!identity) return;
+				try {
+					localStorage.setItem(NOTICE_DISABLED_ID_KEY, identity);
+				} catch (_) { }
+			}
+
+			function createNoticeContentNode(content) {
+				const wrapper = document.createElement('div');
+				wrapper.style.textAlign = 'left';
+				wrapper.style.lineHeight = '1.7';
+				wrapper.style.wordBreak = 'break-word';
+				wrapper.style.whiteSpace = 'pre-wrap';
+				wrapper.textContent = String(content || '');
+				return wrapper;
+			}
+
+			function showInitialNoticeIfNeeded(retryCount = 0) {
+				const notice = getInitialNoticeState();
+				if (!notice || !notice.hasNotice) return;
+
+				const identity = getNoticeIdentity(notice);
+				if (isNoticeDisabled(identity)) return;
+				if (notice.showOnce && hasShownNoticeOnce(identity)) return;
+				if (hasShownNoticeToday(identity)) return;
+
+				if (document.querySelector('.swal-overlay--show-modal')) {
+					if (retryCount < 20) setTimeout(() => showInitialNoticeIfNeeded(retryCount + 1), 500);
+					return;
+				}
+
+				swal({
+					title: String(notice.title || '通知'),
+					content: createNoticeContentNode(notice.content),
+					buttons: {
+						disable: {
+							text: '不再提示',
+							value: 'disable'
+						},
+						confirm: {
+							text: '知道了',
+							value: 'ok'
+						}
+					}
+				}).then(action => {
+					if (action === 'disable') disableNotice(identity);
+					markNoticeShown(notice, identity);
+				});
+			}
+
+			function isDirectPlaybackModeEnabled() {
+				return getPlaybackModeState().mode === 'direct';
+			}
+
+			function buildPlaybackResourceUrl(videoUrl) {
+				return isDirectPlaybackModeEnabled() ? videoUrl : ('/view?url=' + encodeURIComponent(videoUrl));
+			}
+
+			function buildDownloadResourceUrl(videoUrl) {
+				return videoUrl ? ('/view?url=' + encodeURIComponent(videoUrl)) : '';
+			}
+
+			function notifyPlaybackModeIfNeeded(retryCount = 0) {
+				const modeState = getPlaybackModeState();
+				if (!modeState || modeState.mode !== 'direct' || !modeState.notice) return;
+				const noticeKey = 'playbackModeNoticeShown:' + String(modeState.checkedAt || '').slice(0, 10);
+				try {
+					if (sessionStorage.getItem(noticeKey) === '1') return;
+				} catch (_) { }
+
+				setTimeout(() => {
+					if (document.querySelector('.swal-overlay--show-modal')) {
+						if (retryCount < 20) setTimeout(() => notifyPlaybackModeIfNeeded(retryCount + 1), 500);
+						return;
+					}
+					try {
+						sessionStorage.setItem(noticeKey, '1');
+					} catch (_) { }
+					const hasNewSiteUrl = typeof modeState.newSiteUrl === 'string' && !!modeState.newSiteUrl.trim();
+					swal({
+						title: '已自动切换播放模式',
+						text: modeState.notice,
+						icon: 'info',
+						buttons: hasNewSiteUrl ? {
+							cancel: { text: '留在本页', value: 'stay', visible: true },
+							confirm: { text: '访问备用站点', value: 'visit' }
+						} : {
+							confirm: { text: '知道了', value: 'ok' }
+						}
+					}).then(action => {
+						if (action === 'visit' && hasNewSiteUrl) window.location.href = modeState.newSiteUrl;
+					});
+				}, retryCount === 0 ? 600 : 0);
+			}
+
 			function applyPresenceCount(count) {
 				if (!onlineCountValue) return;
 				if (Number.isFinite(count) && count >= 0) {
@@ -1684,8 +2307,57 @@ const html = `
 				}
 			}
 
+			function clearPresenceActivationTimer() {
+				if (!presenceActivationTimer) return;
+				clearTimeout(presenceActivationTimer);
+				presenceActivationTimer = 0;
+			}
+
+			function handlePresenceActivationTrigger() {
+				activateSitePresence();
+			}
+
+			function removePresenceActivationListeners() {
+				if (!presenceActivationEventsBound) return;
+				presenceActivationEventsBound = false;
+				for (const eventName of PRESENCE_ACTIVATION_EVENTS) {
+					window.removeEventListener(eventName, handlePresenceActivationTrigger);
+				}
+			}
+
+			function bindPresenceActivationEvents() {
+				if (!ONLINE_PRESENCE_ENABLED || presenceActivationEventsBound || !onlinePresenceCard) return;
+				presenceActivationEventsBound = true;
+				for (const eventName of PRESENCE_ACTIVATION_EVENTS) {
+					window.addEventListener(eventName, handlePresenceActivationTrigger, { passive: true });
+				}
+			}
+
+			function activateSitePresence() {
+				if (!ONLINE_PRESENCE_ENABLED) return;
+				clearPresenceActivationTimer();
+				if (document.visibilityState === 'hidden') {
+					bindPresenceActivationEvents();
+					return;
+				}
+				presenceActivated = true;
+				removePresenceActivationListeners();
+				connectSitePresence();
+			}
+
+			function scheduleLazyPresenceConnect() {
+				if (!ONLINE_PRESENCE_ENABLED || !onlinePresenceCard || presenceActivated) return;
+				setPresenceVisibility(true);
+				bindPresenceActivationEvents();
+				if (presenceActivationTimer) return;
+				presenceActivationTimer = setTimeout(() => {
+					presenceActivationTimer = 0;
+					activateSitePresence();
+				}, ONLINE_LAZY_CONNECT_DELAY_MS);
+			}
+
 			function connectSitePresence() {
-				if (!onlinePresenceCard) return;
+				if (!ONLINE_PRESENCE_ENABLED || !onlinePresenceCard) return;
 				if (!('WebSocket' in window)) {
 					setPresenceStatus('error');
 					return;
@@ -1740,6 +2412,7 @@ const html = `
 
 			function disconnectSitePresence() {
 				presenceClosedByClient = true;
+				clearPresenceActivationTimer();
 				clearPresenceReconnectTimer();
 				if (!presenceSocket) return;
 				try {
@@ -1883,7 +2556,7 @@ const html = `
 			// 弹窗提示用户遵守法规
 			// 判断是否应该显示提示（24小时内不重复提示）
 			const promptLastDismissed = localStorage.getItem('promptLastDismissed');
-			const shouldShowPrompt = !promptLastDismissed || (Date.now() - parseInt(promptLastDismissed, 10) > 24 * 60 * 60 * 1000);
+			const shouldShowPrompt = !isIntroPromptDisabled() && (!promptLastDismissed || (Date.now() - parseInt(promptLastDismissed, 10) > 24 * 60 * 60 * 1000));
 
 			if (shouldShowPrompt) {
 				// 弹窗提示用户遵守法规
@@ -1896,6 +2569,10 @@ const html = `
 							value: false,
 							visible: true
 						},
+						disable: {
+							text: "不再提示",
+							value: 'disable'
+						},
 						confirm: {
 							text: "跳转 I站",
 							value: true
@@ -1903,7 +2580,10 @@ const html = `
 					}
 				}).then(goToIwara => {
 					videoElement.pause();
-					if (goToIwara) {
+					if (goToIwara === 'disable') {
+						disableIntroPrompt();
+						localStorage.setItem('promptLastDismissed', Date.now().toString());
+					} else if (goToIwara) {
 						const shareId = new URL(location.href).searchParams.get('id');
 						const siteHost = getCurrentSiteHost();
 						location.replace(shareId ? ('https://' + siteHost + '/video/' + shareId) : ('https://' + siteHost));
@@ -2199,13 +2879,14 @@ const html = `
 
 			document.addEventListener('DOMContentLoaded', () => {
 				setTimeout(() => document.querySelector('.wrap').classList.add('on'), 100);
-				if (ONLINE_PRESENCE_ENABLED) {
-					setPresenceVisibility(true);
-					connectSitePresence();
-				}
-				setTimeout(async () => {
+				scheduleLazyPresenceConnect();
+				notifyPlaybackModeIfNeeded();
+				setTimeout(() => {
+					showInitialNoticeIfNeeded();
+				}, 900);
+				setTimeout(() => {
 					const hasValidLocalToken = checkStoredTokenStatusOnLoad();
-					await checkBackendTokenStatusOnLoad(hasValidLocalToken);
+					void checkBackendTokenStatusOnLoad(hasValidLocalToken, INITIAL_BACKEND_TOKEN_STATUS);
 				}, 1200);
 
 				const idParam = new URLSearchParams(location.search).get('id');
@@ -2228,7 +2909,10 @@ const html = `
 			});
 
 			window.addEventListener('pageshow', (evt) => {
-				if (ONLINE_PRESENCE_ENABLED && presenceClosedByClient) connectSitePresence();
+				if (ONLINE_PRESENCE_ENABLED && presenceClosedByClient) {
+					if (presenceActivated) connectSitePresence();
+					else scheduleLazyPresenceConnect();
+				}
 				if (evt && evt.persisted) {
 					triggerClipboardCheckOnEntry('pageshow-bfcache');
 				}
@@ -2241,6 +2925,11 @@ const html = `
 			document.addEventListener('visibilitychange', () => {
 				if (document.visibilityState === 'visible') {
 					triggerClipboardCheckOnEntry('visible');
+					if (ONLINE_PRESENCE_ENABLED && presenceActivated && presenceClosedByClient) {
+						connectSitePresence();
+					} else if (ONLINE_PRESENCE_ENABLED && !presenceActivated) {
+						scheduleLazyPresenceConnect();
+					}
 				}
 			});
 
@@ -2452,7 +3141,7 @@ const html = `
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('播放链接不符合安全规则，已拦截！');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
+					const finalUrl = buildPlaybackResourceUrl(currentVideoUrl);
 
 					showLoading('正在准备播放器...');
 
@@ -2478,10 +3167,10 @@ const html = `
 
 			// 下载当前视频
 			btnDownload.addEventListener('click', () => {
-				const videoSource = document.querySelector('.videoSource');
-				if (!videoSource || !videoSource.src) return;
+				const downloadUrl = buildDownloadResourceUrl(currentVideoUrl);
+				if (!downloadUrl) return;
 				const a = document.createElement('a');
-				a.href = videoSource.src;
+				a.href = downloadUrl;
 				a.download = currentVideoName || 'video.mp4';
 				document.body.appendChild(a);
 				a.click();
@@ -2731,7 +3420,7 @@ const html = `
 					if (!isAllowedViewSourceUrl(currentVideoUrl)) {
 						return swalAlert('播放链接不符合安全规则，已拦截！');
 					}
-					const finalUrl = '/view?url=' + encodeURIComponent(currentVideoUrl);
+					const finalUrl = buildPlaybackResourceUrl(currentVideoUrl);
 
 					// 播放视频
 					videoElement.pause();
@@ -3206,47 +3895,74 @@ const html = `
 				return true;
 			}
 
-			// 页面访问时检查后端默认 Token 状态（若后端未配置则按 Retry-After 节流重试）
-			async function checkBackendTokenStatusOnLoad(hasValidLocalToken = false) {
+			// 页面访问时检查后端 Token 状态（优先使用首页内嵌结果，避免额外请求）
+			async function checkBackendTokenStatusOnLoad(hasValidLocalToken = false, initialStatus = null) {
 				const nextCheckKey = 'backendTokenStatusNextCheckAt';
 				const now = Date.now();
 				const nextCheckAt = parseInt(localStorage.getItem(nextCheckKey) || '0', 10);
 				if (nextCheckAt && now < nextCheckAt) return;
 
+				const applyRetryAfter = retryAfterSeconds => {
+					const retryAfter = parseInt(retryAfterSeconds || '0', 10);
+					if (retryAfter > 0) {
+						localStorage.setItem(nextCheckKey, (Date.now() + retryAfter * 1000).toString());
+					} else {
+						localStorage.removeItem(nextCheckKey);
+					}
+				};
+
+				const showStatusWarning = (status, message, retryCount = 0) => {
+					if (hasValidLocalToken) return;
+					if (document.querySelector('.swal-overlay--show-modal')) {
+						if (retryCount < 20) setTimeout(() => showStatusWarning(status, message, retryCount + 1), 500);
+						return;
+					}
+					const loginIssue = status === 'login_failed' || status === 'login_misconfigured';
+					swal({
+						title: status === 'login_misconfigured' ? '自动登录配置不完整' : (loginIssue ? '自动登录失败' : '令牌已失效'),
+						text: message || (loginIssue ? '请站点管理员检查 Iwara 自动登录配置！' : '后端设置的token已过期！'),
+						icon: 'warning',
+						button: '知道了'
+					});
+				};
+
+				const handleStatus = (status, retryAfterSeconds = 0, message = '') => {
+					if (status === 'not_configured') {
+						applyRetryAfter(retryAfterSeconds || BACKEND_TOKEN_STATUS_DEFAULT_RETRY_SECONDS);
+						return true;
+					}
+					if (status === 'valid') {
+						localStorage.removeItem(nextCheckKey);
+						return true;
+					}
+					if (status === 'expired' || status === 'login_failed' || status === 'login_misconfigured') {
+						applyRetryAfter(retryAfterSeconds);
+						showStatusWarning(status, message);
+						return true;
+					}
+					return false;
+				};
+
+				if (initialStatus && typeof initialStatus === 'object'
+					&& handleStatus(initialStatus.status, initialStatus.retryAfterSeconds)) {
+					return;
+				}
+
 				try {
 					const res = await fetch('/token-status', { headers: { Accept: 'application/json' } });
 					const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
-					if (retryAfter > 0) {
-						localStorage.setItem(nextCheckKey, (Date.now() + retryAfter * 1000).toString());
-					}
 					if (res.status === 204) {
-						if (retryAfter <= 0) {
-							localStorage.removeItem(nextCheckKey);
-						}
+						handleStatus(retryAfter > 0 ? 'not_configured' : 'valid', retryAfter);
 						return;
 					}
 					if (!res.ok) return;
 					const data = await res.json().catch(() => ({}));
-					if (data && data.code === 'backend_token_expired') {
-						localStorage.removeItem(nextCheckKey);
-						if (!hasValidLocalToken) {
-							swal({
-								title: '令牌已失效',
-								text: data.message || '后端设置的token已过期！',
-								icon: 'warning',
-								button: '知道了'
-							});
-						}
-					} else if (data && (data.code === 'backend_login_failed' || data.code === 'backend_login_misconfigured')) {
-						if (!hasValidLocalToken) {
-							swal({
-								title: data.code === 'backend_login_misconfigured' ? '自动登录配置不完整' : '自动登录失败',
-								text: data.message || '请站点管理员检查 Iwara 自动登录配置！',
-								icon: 'warning',
-								button: '知道了'
-							});
-						}
-					}
+					const statusMap = {
+						backend_token_expired: 'expired',
+						backend_login_failed: 'login_failed',
+						backend_login_misconfigured: 'login_misconfigured'
+					};
+					handleStatus(statusMap[data && data.code] || '', retryAfter, data && data.message);
 				} catch (err) {
 					// 后端状态检测失败时静默处理，避免影响正常使用
 				}

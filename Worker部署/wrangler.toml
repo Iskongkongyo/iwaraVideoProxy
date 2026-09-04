@@ -24,7 +24,18 @@ invocation_logs = true
 # BASIC_AUTH_USER = "" # 访问用户名
 # BASIC_AUTH_PASS = "" # 访问密码
 # IWARA_AUTHORIZATION = "" # 后端默认 Token
+# NOTICE_API_URL = "" # 可选通知JSON接口
+# NOTICE_API_CACHE_TTL_SECONDS = "300"
+# FORCE_PLAYBACK_MODE = "proxy" # 可选：proxy或direct；留空时可按请求量自动判断
+# CF_ACCOUNT_TAG = "" # Cloudflare账户ID
+# CF_WORKER_SCRIPT_NAME = "iwara-proxy" # Worker脚本名称
+# WORKERS_DAILY_REQUEST_LIMIT = "100000"
+# DIRECT_MODE_REMAINING_REQUESTS_THRESHOLD = "100"
+# PLAYBACK_MODE_CACHE_TTL_SECONDS = "300"
+# NEW_SITE_URL = "" # 进入直连模式时展示的备用站点
 
 # Iwara自动登录凭据不要写入本文件，请使用以下命令保存为Cloudflare Secret：
 # wrangler secret put IWARA_USERNAME
 # wrangler secret put IWARA_PASSWORD
+# 查询Worker请求量的API Token也应保存为Secret：
+# wrangler secret put CF_ANALYTICS_API_TOKEN

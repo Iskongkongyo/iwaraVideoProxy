@@ -70,8 +70,11 @@
 - 🔐 **前后端 Token 机制**：支持前端自定义 Token 与后端默认 Token，并按优先级自动选择。
 - 🛡️ **全局访问保护**：可通过 Basic Auth 为站点及相关接口增加统一认证。
 - 🔍 **Token 状态监控**：后端提供 `/token-status`，用于检测默认 Token 的配置与有效状态。
+- 🔄 **Iwara 自动登录**：默认 Token 缺失、过期或被拒绝时，可由 Worker 安全刷新共享 Token。
+- 📢 **远程通知**：可从 JSON 接口读取站点通知，支持每日一次、仅一次和用户关闭提示。
+- 📊 **额度保护**：可查询 Cloudflare Analytics，在每日请求量接近上限时让新会话自动改用视频直连。
 - 🚧 **播放接口安全校验**：`/view` 对域名、路径、查询参数和请求方法实施严格限制。
-- 👥 **可选实时会话数**：Cloudflare Worker 可通过 Durable Objects + WebSocket 开启在线会话统计。
+- 👥 **可选实时会话数**：Cloudflare Worker 可通过 Durable Objects + WebSocket 开启在线会话统计，并在用户交互或等待 8 秒后延迟连接。
 - 📋 **剪切板链接识别**：在获得浏览器权限后，可自动识别剪切板中的 Iwara 视频链接并提示。
 
 ---
@@ -161,6 +164,78 @@
 | **自动登录配置不完整** | 返回 `{"code": "backend_login_misconfigured", ...}` |
 | **自动登录失败** | 返回 `{"code": "backend_login_failed", ...}`，并进入 60 秒重试冷却 |
 
+#### 自动登录排查
+
+部署最新版后，请先确认变量确实绑定在**当前 Worker 与当前环境**：
+
+```bash
+cd Worker部署
+npx wrangler secret list
+```
+
+列表中应同时出现 `IWARA_USERNAME` 和 `IWARA_PASSWORD`。如果使用 Wrangler 的命名环境，请在查看、设置 Secret 和部署时都带上相同的 `--env 环境名`。`IWARA_USERNAME` 会作为登录 JSON 的 `email` 字段发送，优先填写 Iwara 登录邮箱。
+
+然后请求脱敏诊断接口。该请求本身会在需要时触发一次自动登录：
+
+```bash
+curl.exe -i "https://你的域名/token-status"
+curl.exe -sS "https://你的域名/token-status?debug=1"
+```
+
+`?debug=1` 只返回变量是否存在、请求时间、HTTP 状态、响应类型、缓存状态和脱敏错误，不返回用户名、密码、Token 或上游响应正文。重点查看：
+
+| 字段 | 如何判断 |
+| :-- | :-- |
+| `configured.username/password` | 两项都应为 `true`，否则 Secret 没有绑定到当前部署环境 |
+| `autoLogin.attempted` | 为 `true` 表示已发起登录；已有有效 `IWARA_AUTHORIZATION` 时不会提前登录 |
+| `lastResponseStatus` | `200` 通常表示接口接受请求；`400/401` 多为账号或接口参数问题；`403` 可能是上游风控拦截 |
+| `lastResponseContentType` | 正常接口通常为 JSON；`403` 且为 `text/html` 通常表示返回了挑战页而不是登录 JSON |
+| `authorizationSource` | `auto_login_cache` 表示自动登录 Token 已获取并在当前 Worker 实例缓存 |
+| `cachedTokenAvailable` | 为 `true` 表示响应内找到了可用 Token |
+| `retryAfterSeconds` | 失败后的剩余冷却秒数；最多约 60 秒 |
+
+同时可在另一个终端实时查看 Worker 的脱敏日志：
+
+```bash
+cd Worker部署
+npx wrangler tail --format pretty
+```
+
+触发 `/token-status?debug=1` 后，应依次看到 `request_started`、`response_received`，成功时再看到 `login_succeeded`，失败时则是 `login_failed`。日志刻意不记录请求体、密码、Token 和响应正文。如果启用了站点 Basic Auth，请先在浏览器登录，或在调试请求中提供对应的 Basic Auth；不要把 Iwara 密码当作站点 Basic Auth 密码。
+
+### 📊 Worker 请求额度保护
+
+Worker 可以使用 [Cloudflare GraphQL Analytics](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/) 查询当天请求量。根据 [Cloudflare Workers 官方限制](https://developers.cloudflare.com/workers/platform/limits/)，免费计划默认按每天 `100000` 次计算；剩余额度小于等于阈值时，**新打开的页面**会把视频播放地址切换为直连，视频信息与下载仍经过 Worker。
+
+| 变量 | 用途 | 默认值 |
+| :-- | :-- | :-- |
+| `CF_ACCOUNT_TAG` | Cloudflare 账户 ID | 空 |
+| `CF_ANALYTICS_API_TOKEN` | 具有 Analytics 读取权限的 API Token，必须使用 Secret | 空 |
+| `CF_WORKER_SCRIPT_NAME` | 当前 Worker 脚本名称 | 空 |
+| `WORKERS_DAILY_REQUEST_LIMIT` | 每日请求额度 | `100000` |
+| `DIRECT_MODE_REMAINING_REQUESTS_THRESHOLD` | 进入直连模式的剩余请求数阈值 | `100` |
+| `PLAYBACK_MODE_CACHE_TTL_SECONDS` | 请求量判断缓存时间 | `300` |
+| `FORCE_PLAYBACK_MODE` | 手动指定 `proxy` 或 `direct`；留空时自动判断 | 空 |
+| `NEW_SITE_URL` | 进入直连模式时提供的备用站点 | 空 |
+
+未配置 Analytics 三项必要参数时会保持代理模式。可访问 `/playback-mode-debug` 查看判断结果；只有启用 Basic Auth 后，`?refresh=1` 才会绕过缓存重新查询，避免公开接口被滥用。
+
+### 📢 远程通知
+
+设置 `NOTICE_API_URL` 后，Worker 会读取并缓存通知 JSON。通知正文按纯文本展示，避免远程内容注入脚本；同一通知默认每天最多出现一次，用户也可以选择“不再提示”。
+
+```json
+{
+  "hasNotice": true,
+  "noticeId": "maintenance-2026-09",
+  "title": "维护通知",
+  "content": "今晚 23:00 进行短暂维护。",
+  "showOnce": false
+}
+```
+
+可通过 `NOTICE_API_CACHE_TTL_SECONDS` 调整缓存时间，默认 `300` 秒。`showOnce: true` 表示该浏览器仅显示一次；更换 `noticeId` 可以发布一条新通知。
+
 ### 🚧 `/view` 严格安全规则
 
 为减少后端 Token 被非法滥用的风险，播放链接需要通过以下校验：
@@ -219,6 +294,8 @@ Cloudflare 会从 `Worker部署` 子目录读取：
 const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问用户名
 const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问密码
 const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用的 Iwara 账号 Token
+const DEFAULT_NOTICE_API_URL = ''; // 设置通知接口 URL
+const DEFAULT_NEW_SITE_URL = ''; // 设置直连模式提示的备用站点
 ```
 
 **方式二：使用 Worker 环境变量（更推荐）**
@@ -229,6 +306,7 @@ const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用的 Iwara 账号 To
 BASIC_AUTH_USER
 BASIC_AUTH_PASS
 IWARA_AUTHORIZATION
+NOTICE_API_URL
 ```
 
 如需自动登录，请另外添加以下两个变量，并将类型设置为**机密**：
@@ -238,7 +316,9 @@ IWARA_USERNAME
 IWARA_PASSWORD
 ```
 
-`IWARA_USERNAME` 会作为登录接口 JSON 中的 `email` 字段提交，可填写你的 Iwara 登录邮箱或当前接口支持的用户名。
+`IWARA_USERNAME` 会作为登录接口 JSON 中的 `email` 字段提交，建议填写 Iwara 登录邮箱。若配置后没有生效，请参考上方“自动登录排查”。
+
+请求额度自动保护还需要配置 `CF_ACCOUNT_TAG`、`CF_WORKER_SCRIPT_NAME`，并将 `CF_ANALYTICS_API_TOKEN` 保存为机密。其余阈值、缓存和备用站点变量可参考上方“Worker 请求额度保护”表格。
 
 配置路径：
 
@@ -279,6 +359,7 @@ npx wrangler deploy
 ```bash
 npx wrangler secret put IWARA_USERNAME
 npx wrangler secret put IWARA_PASSWORD
+npx wrangler secret put CF_ANALYTICS_API_TOKEN
 ```
 
 登录命令会打开浏览器完成授权。

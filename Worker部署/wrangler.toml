@@ -1,0 +1,30 @@
+name = "iwara-proxy" # 可修改为你的 Worker 服务名
+main = "worker.js"
+compatibility_date = "2026-03-08"
+
+# 实时会话数默认关闭。需要启用时，取消下面 7 行的注释后再部署。
+# Worker 会根据 ONLINE_COUNTER 是否存在自动切换界面和连接逻辑。
+# [[durable_objects.bindings]]
+# name = "ONLINE_COUNTER"
+# class_name = "OnlineCounterDurableObject"
+#
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["OnlineCounterDurableObject"]
+
+# 可观测性（可选），可在 Cloudflare 管理页面查看请求
+[observability]
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# 配置环境变量
+[vars]
+# 补充变量值并取消对应行的注释；敏感值更建议使用 `wrangler secret put`。
+# BASIC_AUTH_USER = "" # 访问用户名
+# BASIC_AUTH_PASS = "" # 访问密码
+# IWARA_AUTHORIZATION = "" # 后端默认 Token
+
+# Iwara自动登录凭据不要写入本文件，请使用以下命令保存为Cloudflare Secret：
+# wrangler secret put IWARA_USERNAME
+# wrangler secret put IWARA_PASSWORD

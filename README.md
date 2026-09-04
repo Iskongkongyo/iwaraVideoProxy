@@ -1,174 +1,311 @@
-# 简单反代 Iwara（I 站）视频
+<h1 align="center">Iwara Video Proxy</h1>
 
-**绕过限制，自由播放！**
+<p align="center">
+  <img src="./firefly.jpg" width="180" alt="Firefly 项目图标">
+</p>
 
- 这是一个专为 Iwara（I 站）设计的视频反代与播放解决方案，支持边缘计算与私有服务器部署，旨在提供极致的访问体验！
+<p align="center">
+  <strong>简单反代 Iwara · 绕过限制，自由播放！</strong>
+</p>
+
+<p align="center">
+  一个支持 <strong>边缘计算、第三方反代与私有服务器部署</strong> 的 Iwara 视频代理及播放解决方案。
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Cloudflare%20Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Workers">
+  <img src="https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black" alt="JavaScript">
+  <img src="https://img.shields.io/badge/Node.js-339933?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node.js">
+  <img src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="MIT License">
+</p>
+
 
 > [!IMPORTANT]
->
-> **Iwara**新增[AI视频网站](https://www.iwara.ai)，本项目跟随更新，目前本项目支持播放www.iwara.tv和www.iwara.ai两个网站的视频啦！！！
+> **Iwara 已新增 [AI 视频网站](https://www.iwara.ai)**。本项目已跟随更新，目前支持播放 **[www.iwara.tv](https://www.iwara.tv)** 与 **[www.iwara.ai](https://www.iwara.ai)** 两个站点的视频。
 
 ---
 
-## 🌐  演示站点（传送门）
+## 📖 目录
 
-想要即刻体验？点击下方链接直接进入（由 Cloudflare Worker 驱动）：
+<p align="center">
+  <a href="#demo">🌐 演示站点</a> ·
+  <a href="#features">✨ 功能亮点</a> ·
+  <a href="#preview">📸 界面预览</a> ·
+  <a href="#files">📂 文件说明</a> ·
+  <a href="#stack">🛠️ 技术栈</a> ·
+  <a href="#auth">🔐 认证与 Token</a> ·
+  <a href="#security">🛡️ 核心安全</a> ·
+  <a href="#deploy">🚀 部署指南</a> ·
+  <a href="#tips">💡 使用小贴士</a> ·
+  <a href="#thanks">🙏 鸣谢</a>
+</p>
 
-- 🚀 [主演示站](https://ss.iys.pp.ua)
-- 🛰 [备用演示站](https://ss.ixq.pp.ua)
+---
 
-------
+<a id="demo"></a>
+
+## 🌐 演示站点
+
+想要立即体验？可直接访问以下由 **Cloudflare Worker** 驱动的演示站点：<a href="https://ss.ixq.pp.ua"><strong>🚀 主演示站</strong></a> · <a href="https://ss.iys.pp.ua"><strong>🛰️ 备用演示站</strong></a>
+
+---
+
+<a id="preview"></a>
 
 ## 📸 界面预览
 
-![网站页面](./preview.png)
+<p align="center">
+  <img src="./preview.png" alt="Iwara Video Proxy 网站页面预览">
+</p>
 
-------
+---
 
-## 📂  项目主要文件说明
+<a id="features"></a>
 
-| **文件 / 目录**                  | **说明**                                                     |
-| -------------------------------- | ------------------------------------------------------------ |
-| `index.html`                     | **核心前端**：HTML/CSS/JS 单文件，无需复杂构建               |
-| `sweetalert.min.js`              | **UI 组件**：提供优雅的前端弹窗交互                          |
-| `Worker部署/worker.js`           | **CF Worker 后端**：已内嵌前端模板，实现零服务器部署         |
-| `Worker部署(有会话版)/worker.js` | **CF Worker 后端**：会在屏幕左上角额外显示网站访问实时会话数 |
-| `第三方反代部署/`                | **混合方案**：基于 Node.js，通过第三方接口进行请求转发       |
-| `完全私有部署/`                  | **全控方案**：包含 Node.js 与 Python 两套环境，完全掌控流量  |
+## ✨ 功能亮点
 
-------
+- 🌍 **双站点支持**：兼容 `www.iwara.tv` 与 `www.iwara.ai` 视频播放。
+- ⚡ **多种部署方式**：支持 Cloudflare Worker、Node.js 与 Python 私有部署。
+- 🔐 **前后端 Token 机制**：支持前端自定义 Token 与后端默认 Token，并按优先级自动选择。
+- 🛡️ **全局访问保护**：可通过 Basic Auth 为站点及相关接口增加统一认证。
+- 🔍 **Token 状态监控**：后端提供 `/token-status`，用于检测默认 Token 的配置与有效状态。
+- 🚧 **播放接口安全校验**：`/view` 对域名、路径、查询参数和请求方法实施严格限制。
+- 👥 **可选实时会话数**：Cloudflare Worker 可通过 Durable Objects + WebSocket 开启在线会话统计。
+- 📋 **剪切板链接识别**：在获得浏览器权限后，可自动识别剪切板中的 Iwara 视频链接并提示。
 
-## 🛠 技术栈
+---
 
-| **模块**       | **使用技术**                                           |
-| -------------- | ------------------------------------------------------ |
-| **前端**       | HTML5, CSS3 (Modern UI), JavaScript (ES6+), SweetAlert |
-| **Worker 版**  | Cloudflare Workers (V8 Runtime), Fetch API             |
-| **Node.js 版** | Express.js, node-fetch, CORS                           |
-| **Python 版**  | Flask, Requests, Cloudscraper (绕过检测)               |
+<a id="files"></a>
 
-------
+## 📂 项目主要文件说明
 
-## ✨ 新增认证与 Token 机制
+| 文件 / 目录 | 用途 |
+| :-- | :-- |
+| `index.html` | **核心前端**：HTML / CSS / JavaScript 单文件，无需复杂构建流程 |
+| `sweetalert.min.js` | **UI 组件**：提供更友好的前端弹窗交互 |
+| `Worker部署/` | **Cloudflare Worker 统一版**：可选开启全站实时会话数，无需维护两份 Worker 代码 |
+| `第三方反代部署/` | **混合部署方案**：基于 Node.js，通过 CorsBridge 进行请求转发 |
+| `完全私有部署/` | **完全私有方案**：提供 Node.js 与 Python 两套后端环境，便于完全掌控流量 |
 
-为了防止站点滥用并确保与 Iwara 原生请求不冲突，项目引入了以下核心机制：
+---
+
+<a id="stack"></a>
+
+## 🛠️ 技术栈
+
+| 模块 | 使用技术 |
+| :-- | :-- |
+| **前端** | HTML5、CSS3（Modern UI）、JavaScript（ES6+）、SweetAlert |
+| **Worker 版** | Cloudflare Workers（V8 Runtime）、Fetch API |
+| **Node.js 版** | Express.js、node-fetch、CORS |
+| **Python 版** | Flask、Requests、Cloudscraper（绕过检测） |
+
+---
+
+<a id="auth"></a>
+
+## 🔐 认证与 Token 机制
+
+为了防止站点滥用，并避免与 Iwara 原生请求头产生冲突，项目提供了前后端协同的认证与 Token 处理机制。
 
 ### 🔑 自定义 Token：`CustomizedToken`
 
-- **前端逻辑**：不再直接发送 `Authorization` 头，而是使用 `CustomizedToken: Bearer xxxxx`。
-- **后端逻辑**：后端会自动读取该请求头，并在转发时映射回 Iwara 要求的标准 `Authorization` 头。
-- **优势**：完美避开 Basic Auth 带来的请求头冲突问题。
+| 环节 | 处理方式 |
+| :-- | :-- |
+| **前端** | 不直接发送 `Authorization`，而是发送 `CustomizedToken: Bearer xxxxx` |
+| **后端** | 自动读取 `CustomizedToken`，转发请求时映射回 Iwara 要求的标准 `Authorization` 请求头 |
+| **目的** | 避免与 Basic Auth 使用的 `Authorization` 请求头发生冲突 |
 
-### 🛡 后端 Basic Auth (全局保护)
+### 🛡️ 后端 Basic Auth（全局保护）
 
-通过设置 `BASIC_AUTH_USER` 和 `BASIC_AUTH_PASS` 环境变量启用。
+通过环境变量 `BASIC_AUTH_USER` 与 `BASIC_AUTH_PASS` 启用。
 
-- **作用范围**：全局生效，保护包括首页、`/video*`、`/file*`、`/view` 等所有接口。
-- **留空默认关闭**：不配置时默认无需密码访问。
+- **作用范围**：全局生效，可保护首页、`/video*`、`/file*`、`/view` 等接口。
+- **默认行为**：两个变量留空时不启用 Basic Auth，无需密码即可访问。
 
 ### 🤖 智能 Token 处理
 
-- **后端默认 Token**：可通过 `IWARA_AUTHORIZATION` 设置站点全局默认 Token。
-- **标准化**：系统会自动处理 JWT，无论是否带 `Bearer ` 前缀都会被自动补全为标准格式。
+- **后端默认 Token**：可通过 `IWARA_AUTHORIZATION` 设置站点级默认 Token。
+- **Worker 自动登录**：同时配置 `IWARA_USERNAME` 与 `IWARA_PASSWORD` 后，默认 Token 缺失或已过期时会通过 Iwara 官方登录接口自动获取新 Token。
+- **自动刷新**：上游明确返回 `401` 时，Worker 会重新登录并只重试原请求一次；并发登录会自动合并，失败后冷却 60 秒。
+- **内存缓存**：自动获取的 Token 只缓存在当前 Worker 实例内，不写入浏览器、日志或项目文件；新实例会按需重新登录。
+- **自动标准化**：系统会自动处理 JWT；无论是否包含 `Bearer ` 前缀，都会标准化为正确格式。
 
-### 🚦 Token 优先级 (由高到低)
+### 🚦 Token 优先级
 
-1. 用户在前端页面自行填写的 `CustomizedToken`。
-2. 后端环境变量中配置的 `IWARA_AUTHORIZATION`和Worker 代码中的硬编码默认值 `DEFAULT_IWARA_AUTHORIZATION`。
+优先级由高到低：
 
-------
+1. **前端 Token**：用户在页面中自行填写的 `CustomizedToken`。
+2. **有效的后端默认 Token**：环境变量 `IWARA_AUTHORIZATION`，或 Worker 代码中的硬编码默认值 `DEFAULT_IWARA_AUTHORIZATION`。
+3. **Worker 自动登录 Token**：默认 Token 缺失、过期或被上游拒绝时，通过 `IWARA_USERNAME` 与 `IWARA_PASSWORD` 获取。
 
-## 🛠 核心功能与安全
+> [!NOTE]
+> 当前端已经提供 `CustomizedToken` 时，将优先使用用户自己的 Token，而不是后端默认 Token。
+
+---
+
+<a id="security"></a>
+
+## 🛡️ 核心功能与安全
 
 ### 🔍 Token 状态监控：`/token-status`
 
-后端新增接口用于实时监测后端 Token 有效性：
+后端提供 `/token-status` 接口，用于实时检测后端默认 Token 的状态：
 
-- **未配置时**：返回 `204 No Content`（带 1 天节流头）。
-- **有效时**：返回 `204 No Content`。
-- **已过期**：返回 JSON `{"code": "backend_token_expired", ...}`，前端将引导用户操作。
+| 状态 | 返回结果 |
+| :-- | :-- |
+| **未配置 Token** | `204 No Content`，并附带 1 天节流头 |
+| **Token 有效** | `204 No Content` |
+| **Token 已过期** | 返回 `{"code": "backend_token_expired", ...}`，前端据此引导用户处理 |
+| **自动登录配置不完整** | 返回 `{"code": "backend_login_misconfigured", ...}` |
+| **自动登录失败** | 返回 `{"code": "backend_login_failed", ...}`，并进入 60 秒重试冷却 |
 
 ### 🚧 `/view` 严格安全规则
 
-为防止后端 Token 被非法滥用，系统对播放链接实施强校验：
+为减少后端 Token 被非法滥用的风险，播放链接需要通过以下校验：
 
 - **域名锁定**：必须匹配 `xxx.iwara.tv`。
-- **路径校验**：必须严格为 `/view`。
-- **参数校验**：必须含一个及以上查询字符串。
-- **方法限制**：反代接口仅允许 `GET` 与 `OPTIONS` 方法，其余一律 `403`。
+- **路径校验**：路径必须严格为 `/view`。
+- **参数校验**：必须包含一个及以上查询字符串。
+- **方法限制**：仅允许 `GET` 与 `OPTIONS`，其余请求方法统一返回 `403`。
 
-------
+---
+
+<a id="deploy"></a>
 
 ## 🚀 部署指南
 
-### 🌟 A. Cloudflare Worker (推荐)
+### 🌟 A. Cloudflare Worker（推荐）
 
-1. 复制 `Worker部署/worker.js` 内容。
+Worker 已合并为一份统一代码，会根据是否绑定 `ONLINE_COUNTER` 自动切换运行模式：
 
-2. 在 [Cloudflare后台](https://dash.cloudflare.com/login) 创建新的 Worker 并粘贴代码。
+| 模式 | Durable Object | 实时用户会话数 | WebSocket |
+| :-- | :--: | :--: | :--: |
+| **无会话模式（默认）** | ❌ | ❌ | ❌ |
+| **有会话模式** | ✅ `ONLINE_COUNTER` | ✅ | ✅ |
 
-3. **环境变量**：两种填写方式，第一种在worker.js文件中找到下面👇这段自行填写
+#### ☁️ 一键部署（默认无会话）
 
-   ```
-   const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
-   const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
-   const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
-   ```
+<p align="center">
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/Iskongkongyo/iwaraVideoProxy/tree/main/Worker%E9%83%A8%E7%BD%B2">
+    <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare">
+  </a>
+</p>
 
-   第二种，在Worker面板中添加 `BASIC_AUTH_USER` 、`BASIC_AUTH_PASS`或`IWARA_AUTHORIZATION`变量（比改代码更安全）。
+部署时登录 Cloudflare，按页面提示选择账号、修改 Worker 名称并完成部署即可。
 
-   修改位置在`构建 -> Compute -> Workers 和 Pages -> 设置 -> 变量和机密`，在里面填写你需要的环境变量然后重新部署即可！
+Cloudflare 会从 `Worker部署` 子目录读取：
 
-4. **注意**：建议绑定自定义域名，因为 `*.workers.dev` 在国内部分网络环境受限。
+- `wrangler.toml`
+- `worker.js`
 
-另外，想要部署带会话版的话，需先安装[Node.js](https://nodejs.org/zh-cn/download)版本20及以上版本！安装后按以下操作执行：
+默认配置**不会创建 Durable Object**。
+
+> [!TIP]
+> 一键部署完成后，可在 Cloudflare 控制台的 `设置 → 变量和机密` 中按需添加 `BASIC_AUTH_USER`、`BASIC_AUTH_PASS` 与 `IWARA_AUTHORIZATION`。自动登录使用的 `IWARA_USERNAME`、`IWARA_PASSWORD` 必须保存为**机密**。
+>
+> 如需开启实时会话数，请在新建的 Git 仓库中取消 `wrangler.toml` 对应配置的注释，然后重新部署。
+
+#### 🧩 无会话模式：面板部署
+
+1. 复制 `Worker部署/worker.js` 的完整内容。
+2. 打开 [Cloudflare 控制台](https://dash.cloudflare.com/login)，创建新的 Worker，粘贴代码并部署；此模式无需设置 Durable Object。
+3. 配置环境变量。支持以下两种方式：
+
+**方式一：直接修改 `worker.js` 默认值**
+
+```js
+const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问用户名
+const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问密码
+const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用的 Iwara 账号 Token
+```
+
+**方式二：使用 Worker 环境变量（更推荐）**
+
+在 Worker 面板中添加：
+
+```text
+BASIC_AUTH_USER
+BASIC_AUTH_PASS
+IWARA_AUTHORIZATION
+```
+
+如需自动登录，请另外添加以下两个变量，并将类型设置为**机密**：
+
+```text
+IWARA_USERNAME
+IWARA_PASSWORD
+```
+
+`IWARA_USERNAME` 会作为登录接口 JSON 中的 `email` 字段提交，可填写你的 Iwara 登录邮箱或当前接口支持的用户名。
+
+配置路径：
+
+```text
+构建 → Compute → Workers 和 Pages → 设置 → 变量和机密
+```
+
+填写需要的环境变量后重新部署即可。
+
+> [!WARNING]
+> 建议为 Worker 绑定自定义域名，因为 `*.workers.dev` 在国内部分网络环境中可能受限。
+
+#### 👥 有会话模式：Wrangler 部署
+
+1. 安装 [Node.js](https://nodejs.org/zh-cn/download) **20 或更高版本**，然后进入 `Worker部署` 目录。
+2. 打开 `wrangler.toml`，修改 `name`。
+3. 取消 `durable_objects.bindings` 与 `migrations` 两段配置的注释。
+4. 两段配置必须**同时启用**，绑定名称保持为 `ONLINE_COUNTER`。
 
 > [!NOTE]
->
-> 会话版需worker.js绑定使用Cloudflare的Durable Objects（耐用对象）。截止2026年3月8日，Cloudflare 官方对Durable Objects的免费额度是：
->
-> - Durable Objects 100,000 requests/day
-> - Durable Objects 13,000 GB-s/day
-> - Durable Objects的使用情况可在构建 -> Compute -> Durable Objects里查看！！！
+> 实时会话数使用 **Cloudflare Durable Objects** 与**休眠 WebSocket**。实际额度及用量请以 Cloudflare 控制台和[官方配置文档](https://developers.cloudflare.com/workers/wrangler/configuration/#durable-objects)为准。
 
-**本地安装Wrangler**
+安装 Wrangler：
 
-```
+```bash
 npm install -D wrangler@latest
 ```
 
-**修改wrangler.toml**
+登录并部署：
 
-把需要填写的内容补充完整，如：worker服务名和环境变量。
-
-**部署Cloudfalre**
-
-执行第一步会打开浏览器要求授权，记得授予权限（代理启用Tun的请关闭，否则授权可能出问题）！
-
-```
+```bash
 npx wrangler login
 npx wrangler deploy
 ```
 
-### 📦 B. Node.js 环境 (第三方或私有部署)
+自动登录凭据建议通过 Wrangler Secret 设置，不要写入 `wrangler.toml`：
 
-```Bash
-# 进入对应目录后安装依赖
+```bash
+npx wrangler secret put IWARA_USERNAME
+npx wrangler secret put IWARA_PASSWORD
+```
+
+登录命令会打开浏览器完成授权。
+
+如之后希望关闭实时会话数，只需重新注释 `wrangler.toml` 中上述两段配置并再次部署，**无需更换 `worker.js`**。
+
+### 📦 B. Node.js 环境（第三方或私有部署）
+
+进入对应目录后安装依赖并启动服务：
+
+```bash
 npm install express node-fetch cors
-# 启动服务 (默认端口 8000)
 node server.js
 ```
 
+默认服务端口为 `8000`。
+
 ### 🐍 C. Python 环境
 
-```Bash
-# 安装必要组件
+安装所需依赖并启动后端：
+
+```bash
 pip install flask requests cloudscraper
-# 运行后端
 python server.py
 ```
 
-#### Node.js/Python可选环境变量（新增）
+### ⚙️ Node.js / Python 可选环境变量
 
 ```bash
 BASIC_AUTH_USER=your_user
@@ -176,15 +313,50 @@ BASIC_AUTH_PASS=your_pass
 IWARA_AUTHORIZATION=your_iwara_token_or_bearer
 ```
 
-------
+| 环境变量 | 用途 |
+| :-- | :-- |
+| `BASIC_AUTH_USER` | Basic Auth 用户名 |
+| `BASIC_AUTH_PASS` | Basic Auth 密码 |
+| `IWARA_AUTHORIZATION` | 后端默认使用的 Iwara Token |
+
+---
+
+<a id="tips"></a>
 
 ## 💡 使用小贴士
 
-- **前端 Token**：用户可自行点击“填写令牌”后设置！保存在本地 `localStorage`，系统会自动检测是否过期并弹窗提示，过期会提示并自动清除。
-- **共享 Token**：如果你希望站点默认就能播放某些需要登录的信息，可设置后端 `IWARA_AUTHORIZATION` 。但请注意所有访客默认都能访问需要登录的内容，请务必配合 Basic Auth 使用（除非用户自己填写了前端 token）。
-- **读取剪切板**：如果你授予网站“允许读取剪切板内容”的权限，网站会在初次加载、从其他页面切回项目页面（需用户点击页面任何内容）、从其他应用程序切回项目页面这三种情况下自动识别剪切板内容是否含Iwara网站视频链接。如果识别到剪切板内容有Iwara网站视频链接会给予提示！（注意：处于视频播放界面时，读取剪切板内容功能会被抑制！如果剪切板内Iwara视频链接对应视频ID跟输入框内视频ID保持一致会直接跳过弹窗提示！）
+### 🔑 前端 Token
 
-------
+用户可以点击页面中的 **“填写令牌”** 自行设置 Token。
+
+Token 会保存在浏览器本地 `localStorage` 中；系统会自动检测是否过期，在过期时弹窗提示并自动清除失效 Token。
+
+### 🔐 共享 Token
+
+如果希望站点默认即可播放部分需要登录才能访问的内容，可以配置后端 `IWARA_AUTHORIZATION`。
+
+> [!WARNING]
+> 配置共享 Token 后，所有访客默认都可能借助该 Token 访问需要登录的内容。除非用户自行填写前端 Token，否则建议务必配合 **Basic Auth** 使用。
+
+启用 Worker 自动登录时同样属于共享账号能力。建议使用专用 Iwara 账号、开启 Worker 的 Basic Auth，并仅通过 Cloudflare Secret 保存登录凭据。自动登录接口若遇到账号错误、Iwara 限流或 Cloudflare 风控，页面会提示站点管理员检查配置；公开内容仍会尝试以无 Token 模式访问。
+
+### 📋 剪切板自动识别
+
+在用户授予网站**读取剪切板内容**权限后，页面会在以下场景尝试识别剪切板中是否存在 Iwara 视频链接：
+
+1. 页面初次加载时。
+2. 从其他页面切回项目页面时（需要用户点击页面任意位置）。
+3. 从其他应用程序切回项目页面时。
+
+识别到有效的 Iwara 视频链接后，页面会给予提示。
+
+> [!NOTE]
+> - 处于视频播放界面时，剪切板读取功能会被抑制。
+> - 如果剪切板中的 Iwara 视频链接对应的视频 ID 与当前输入框内的视频 ID 一致，则会直接跳过弹窗提示。
+
+---
+
+<a id="thanks"></a>
 
 ## 🙏 鸣谢
 
@@ -194,3 +366,10 @@ IWARA_AUTHORIZATION=your_iwara_token_or_bearer
 - [Cloudflare](https://www.cloudflare.com/)
 - [SweetAlert](https://sweetalert.js.org/)
 - [gnuns](https://github.com/gnuns)
+
+---
+
+<p align="center">
+  <strong>Iwara Video Proxy</strong><br>
+  简单、灵活、可自托管的 Iwara 视频代理与播放方案。
+</p>

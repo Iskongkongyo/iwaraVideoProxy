@@ -1,11 +1,20 @@
-// 变量分全局变量和环境变量，在这里改代码设置用户名、密码和Token是全局变量，可以用但不建议！
-// 设置用户名、密码和Token更建议在Cloudflare Worker的面板(优先级更高)里设置！
-// 用户名、密码和Token对应的环境变量名分别为BASIC_AUTH_USER、BASIC_AUTH_PASS和IWARA_AUTHORIZATION！
-// 如果你设置了默认Iwara账号的Token，那么我强烈建议你设置访问的用户名和密码进一步保证你的账号隐私安全（虽然项目有做保护）！！！
+// Basic Auth和默认Token既可使用下方常量，也可通过Cloudflare环境变量设置（优先级更高）。
+// Iwara登录账号与密码仅支持IWARA_USERNAME、IWARA_PASSWORD环境变量，请务必保存为Secret！
+// Basic Auth对应的环境变量名分别为BASIC_AUTH_USER和BASIC_AUTH_PASS！
+// Iwara Token可设置IWARA_AUTHORIZATION；自动登录请使用Secret设置IWARA_USERNAME和IWARA_PASSWORD！
+// 如果你设置了默认Iwara Token或自动登录凭据，强烈建议同时启用Basic Auth保护共享账号能力！
 const DEFAULT_BASIC_AUTH_USER = ''; // 设置访问的用户名
 const DEFAULT_BASIC_AUTH_PASS = ''; // 设置访问的密码
 const DEFAULT_IWARA_AUTHORIZATION = ''; // 设置默认使用Iwara账号的Token
 const BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS = 86400; // 前端请求检测后端Token有效期间隔(单位秒，默认1天，后端未设置token生效)
+const IWARA_LOGIN_URL = 'https://api.iwara.tv/user/login';
+const IWARA_LOGIN_RETRY_COOLDOWN_MS = 60000;
+const IWARA_TOKEN_REFRESH_SKEW_SECONDS = 60;
+
+let cachedAutoIwaraAuthorization = '';
+let iwaraLoginPromise = null;
+let iwaraLoginRetryAfter = 0;
+let lastIwaraLoginError = null;
 
 function pickEnvOrDefault(envValue, defaultValue = '') {
 	const v = typeof envValue === 'string' ? envValue.trim() : '';
@@ -17,7 +26,9 @@ function workerConfig(env) {
 	return {
 		basicUser: pickEnvOrDefault(env?.BASIC_AUTH_USER, DEFAULT_BASIC_AUTH_USER),
 		basicPass: pickEnvOrDefault(env?.BASIC_AUTH_PASS, DEFAULT_BASIC_AUTH_PASS),
-		iwaraAuthorization: pickEnvOrDefault(env?.IWARA_AUTHORIZATION, DEFAULT_IWARA_AUTHORIZATION)
+		iwaraAuthorization: pickEnvOrDefault(env?.IWARA_AUTHORIZATION, DEFAULT_IWARA_AUTHORIZATION),
+		iwaraUsername: pickEnvOrDefault(env?.IWARA_USERNAME),
+		iwaraPassword: typeof env?.IWARA_PASSWORD === 'string' ? env.IWARA_PASSWORD : ''
 	};
 }
 
@@ -65,7 +76,7 @@ function resolveUpstreamAuthorization(request, env) {
 	return normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
 }
 
-function buildProxyRequest(targetUrl, request, env) {
+function buildProxyRequest(targetUrl, request, env, authorizationOverride) {
 	const headers = new Headers(request.headers);
 
 	headers.delete('Authorization');
@@ -76,7 +87,8 @@ function buildProxyRequest(targetUrl, request, env) {
 	headers.delete('customizedtoken');
 
 	const cfg = workerConfig(env);
-	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || (cfg.iwaraAuthorization || '').trim());
+	const backendAuthorization = authorizationOverride === undefined ? cfg.iwaraAuthorization : authorizationOverride;
+	const upstreamAuthorization = normalizeIwaraAuthorization(customizedToken || backendAuthorization || '');
 	if (upstreamAuthorization) {
 		headers.set('Authorization', upstreamAuthorization);
 	}
@@ -102,9 +114,138 @@ function decodeJwtPayload(token) {
 	}
 }
 
-function getBackendTokenStatus(env) {
+function isIwaraAuthorizationFresh(authorization, skewSeconds = IWARA_TOKEN_REFRESH_SKEW_SECONDS) {
+	const normalized = normalizeIwaraAuthorization(authorization);
+	if (!normalized) return false;
+
+	const payload = decodeJwtPayload(normalized);
+	if (!payload || typeof payload.exp !== 'number') return true;
+	return payload.exp > Math.floor(Date.now() / 1000) + Math.max(0, Number(skewSeconds) || 0);
+}
+
+function hasIwaraLoginCredentials(cfg) {
+	return !!(cfg.iwaraUsername && cfg.iwaraPassword);
+}
+
+function hasPartialIwaraLoginCredentials(cfg) {
+	return !!(cfg.iwaraUsername || cfg.iwaraPassword) && !hasIwaraLoginCredentials(cfg);
+}
+
+function invalidateAutoIwaraAuthorization() {
+	cachedAutoIwaraAuthorization = '';
+}
+
+async function getAutoIwaraAuthorization(env, forceRefresh = false) {
+	const cfg = workerConfig(env);
+	if (!hasIwaraLoginCredentials(cfg)) {
+		throw new Error('Iwara自动登录账号或密码未完整配置');
+	}
+
+	if (!forceRefresh && isIwaraAuthorizationFresh(cachedAutoIwaraAuthorization)) {
+		return cachedAutoIwaraAuthorization;
+	}
+	if (iwaraLoginPromise) return iwaraLoginPromise;
+	if (Date.now() < iwaraLoginRetryAfter) {
+		throw lastIwaraLoginError || new Error('Iwara自动登录暂时处于重试冷却中');
+	}
+
+	if (forceRefresh) invalidateAutoIwaraAuthorization();
+	const currentPromise = (async () => {
+		try {
+			const response = await fetch(IWARA_LOGIN_URL, {
+				method: 'POST',
+				headers: {
+					'Accept': 'application/json',
+					'Accept-Language': 'zh-CN,zh;q=0.9',
+					'Content-Type': 'application/json',
+					'Origin': 'https://www.iwara.tv',
+					'Referer': 'https://www.iwara.tv/',
+					'X-Site': 'www.iwara.tv'
+				},
+				body: JSON.stringify({
+					email: cfg.iwaraUsername,
+					password: cfg.iwaraPassword
+				})
+			});
+
+			if (!response.ok) {
+				throw new Error('Iwara登录接口返回HTTP ' + response.status);
+			}
+			const data = await response.json().catch(() => null);
+			const authorization = normalizeIwaraAuthorization(data && data.token);
+			if (!authorization) {
+				throw new Error('Iwara登录响应中缺少Token');
+			}
+
+			cachedAutoIwaraAuthorization = authorization;
+			iwaraLoginRetryAfter = 0;
+			lastIwaraLoginError = null;
+			return authorization;
+		} catch (error) {
+			invalidateAutoIwaraAuthorization();
+			iwaraLoginRetryAfter = Date.now() + IWARA_LOGIN_RETRY_COOLDOWN_MS;
+			lastIwaraLoginError = error instanceof Error ? error : new Error(String(error));
+			throw lastIwaraLoginError;
+		}
+	})();
+
+	iwaraLoginPromise = currentPromise;
+	try {
+		return await currentPromise;
+	} finally {
+		if (iwaraLoginPromise === currentPromise) iwaraLoginPromise = null;
+	}
+}
+
+async function resolveBackendIwaraAuthorization(env) {
+	const cfg = workerConfig(env);
+	const configuredAuthorization = normalizeIwaraAuthorization(cfg.iwaraAuthorization);
+	if (isIwaraAuthorizationFresh(configuredAuthorization)) return configuredAuthorization;
+
+	if (hasIwaraLoginCredentials(cfg)) {
+		try {
+			return await getAutoIwaraAuthorization(env);
+		} catch (_) {
+			// 自动登录失败时仍保留原请求行为，让公开内容可以在无Token状态下继续访问。
+		}
+	}
+	return configuredAuthorization;
+}
+
+async function fetchIwaraProxy(targetUrl, request, env) {
+	const customizedToken = (request.headers.get('CustomizedToken') || '').trim();
+	if (customizedToken) {
+		return fetch(buildProxyRequest(targetUrl, request, env));
+	}
+
+	const authorization = await resolveBackendIwaraAuthorization(env);
+	const response = await fetch(buildProxyRequest(targetUrl, request, env, authorization));
+	if (response.status !== 401 || !hasIwaraLoginCredentials(workerConfig(env))) {
+		return response;
+	}
+
+	try {
+		const refreshedAuthorization = await getAutoIwaraAuthorization(env, true);
+		return fetch(buildProxyRequest(targetUrl, request, env, refreshedAuthorization));
+	} catch (_) {
+		return response;
+	}
+}
+
+async function getBackendTokenStatus(env) {
 	const cfg = workerConfig(env);
 	const token = normalizeIwaraAuthorization(cfg.iwaraAuthorization || '');
+	if (isIwaraAuthorizationFresh(token, 0)) return { status: 'valid' };
+	if (hasPartialIwaraLoginCredentials(cfg)) return { status: 'login_misconfigured' };
+
+	if (hasIwaraLoginCredentials(cfg)) {
+		try {
+			await getAutoIwaraAuthorization(env);
+			return { status: 'valid' };
+		} catch (_) {
+			return { status: 'login_failed' };
+		}
+	}
 	if (!token) return { status: 'not_configured' };
 
 	const payload = decodeJwtPayload(token);
@@ -136,6 +277,140 @@ function isAllowedProxyMethod(method) {
 function isProxyPath(pathname) {
 	return pathname.startsWith('/video/') || pathname.startsWith('/videos') || pathname.startsWith('/file/') || pathname.startsWith('/view');
 }
+
+function normalizePresenceSessionId(value) {
+	const v = String(value || '').trim();
+	return /^[a-zA-Z0-9_-]{12,120}$/.test(v) ? v : '';
+}
+
+function jsonResponse(data, status = 200, extraHeaders = {}) {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: Object.assign({
+			'content-type': 'application/json;charset=UTF-8',
+			'cache-control': 'no-store'
+		}, extraHeaders)
+	});
+}
+
+function getOnlineCounterStub(env) {
+	const namespace = env && env.ONLINE_COUNTER;
+	if (!namespace || typeof namespace.idFromName !== 'function' || typeof namespace.get !== 'function') {
+		return null;
+	}
+	return namespace.get(namespace.idFromName('global-site-presence'));
+}
+
+function buildDurableObjectRequest(targetUrl, request) {
+	return new Request(targetUrl, request);
+}
+
+function getSocketSessionId(socket) {
+	try {
+		const attachment = socket.deserializeAttachment();
+		return normalizePresenceSessionId(attachment && attachment.sessionId);
+	} catch {
+		return '';
+	}
+}
+
+function countUniquePresenceSessions(sockets) {
+	const sessionIds = new Set();
+	for (const socket of sockets || []) {
+		const sessionId = getSocketSessionId(socket);
+		if (sessionId) sessionIds.add(sessionId);
+	}
+	return sessionIds.size;
+}
+
+function createPresencePayload(online) {
+	return JSON.stringify({
+		type: 'site_online_count',
+		online: Math.max(0, Number(online) || 0),
+		ts: Date.now()
+	});
+}
+
+export class OnlineCounterDurableObject {
+	constructor(state, env) {
+		this.state = state;
+		this.env = env;
+	}
+
+	getOnlineCount() {
+		return countUniquePresenceSessions(this.state.getWebSockets());
+	}
+
+	broadcastOnlineCount() {
+		const payload = createPresencePayload(this.getOnlineCount());
+		for (const socket of this.state.getWebSockets()) {
+			try {
+				socket.send(payload);
+			} catch (_) { }
+		}
+	}
+
+	closeDuplicateSessions(sessionId, keepSocket = null) {
+		for (const socket of this.state.getWebSockets()) {
+			if (socket === keepSocket) continue;
+			if (getSocketSessionId(socket) !== sessionId) continue;
+			try {
+				socket.close(1000, 'session replaced');
+			} catch (_) { }
+		}
+	}
+
+	async fetch(request) {
+		const url = new URL(request.url);
+		if (url.pathname === '/count') {
+			return jsonResponse({ online: this.getOnlineCount() });
+		}
+
+		const upgradeHeader = request.headers.get('Upgrade') || '';
+		if (upgradeHeader.toLowerCase() !== 'websocket') {
+			return jsonResponse({ error: '预期 WebSocket 升级请求！' }, 426, { 'upgrade': 'websocket' });
+		}
+
+		const sessionId = normalizePresenceSessionId(url.searchParams.get('sid'));
+		if (!sessionId) {
+			return jsonResponse({ error: '缺少有效的会话标识！' }, 400);
+		}
+
+		const webSocketPair = new WebSocketPair();
+		const clientSocket = webSocketPair[0];
+		const serverSocket = webSocketPair[1];
+
+		this.closeDuplicateSessions(sessionId);
+		this.state.acceptWebSocket(serverSocket);
+		serverSocket.serializeAttachment({ sessionId });
+
+		this.broadcastOnlineCount();
+		return new Response(null, {
+			status: 101,
+			webSocket: clientSocket
+		});
+	}
+
+	webSocketMessage(ws, message) {
+		if (String(message || '').trim().toLowerCase() === 'ping') {
+			try {
+				ws.send(JSON.stringify({ type: 'pong', ts: Date.now() }));
+			} catch (_) { }
+		}
+	}
+
+	webSocketClose() {
+		this.broadcastOnlineCount();
+	}
+
+	webSocketError(ws) {
+		try {
+			ws.close(1011, 'socket error');
+		} catch (_) { }
+		this.broadcastOnlineCount();
+	}
+}
+
 export default {
 	async fetch(request, env) {
 		const authFailed = verifyBasicAuth(request, env);
@@ -161,7 +436,7 @@ export default {
 		}
 
 		if (url.pathname === '/token-status') {
-			const status = getBackendTokenStatus(env);
+			const status = await getBackendTokenStatus(env);
 			if (status.status === 'not_configured') {
 				return new Response(null, {
 					status: 204,
@@ -171,19 +446,42 @@ export default {
 			if (status.status === 'valid') {
 				return new Response(null, { status: 204 });
 			}
+			if (status.status === 'login_misconfigured') {
+				return jsonResponse({
+					code: 'backend_login_misconfigured',
+					message: 'Iwara自动登录配置不完整，请同时设置IWARA_USERNAME和IWARA_PASSWORD！'
+				}, 200, { 'Retry-After': '60' });
+			}
+			if (status.status === 'login_failed') {
+				return jsonResponse({
+					code: 'backend_login_failed',
+					message: 'Iwara自动登录失败，请站点管理员检查账号、密码或上游访问状态！'
+				}, 200, { 'Retry-After': '60' });
+			}
 			return new Response(JSON.stringify({ code: 'backend_token_expired', message: '后端设置的token已过期！' }), {
 				status: 200,
 				headers: { 'content-type': 'application/json;charset=UTF-8' }
 			});
+		} else if (url.pathname === '/online-count' || url.pathname === '/online-presence') {
+			const counterStub = getOnlineCounterStub(env);
+			if (!counterStub) {
+				return jsonResponse({ error: 'ONLINE_COUNTER Durable Object 未绑定！' }, 503);
+			}
+
+			const targetUrl = new URL(request.url);
+			targetUrl.pathname = url.pathname === '/online-count' ? '/count' : '/ws';
+			targetUrl.search = url.search;
+			return counterStub.fetch(buildDurableObjectRequest(targetUrl.toString(), request));
 		} else if (url.pathname === '/') {
-			return new Response(html, {
+			const page = html.replace('__ONLINE_PRESENCE_ENABLED__', getOnlineCounterStub(env) ? 'true' : 'false');
+			return new Response(page, {
 				headers: {
 					"content-type": "text/html;charset=UTF-8",
 				},
 			});
 		} else if (url.pathname.startsWith('/video/') || url.pathname.startsWith('/videos')) {
 			url.hostname = 'apiq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env));
+			return fetchIwaraProxy(url.toString(), request, env);
 		} else if (url.pathname.startsWith('/view')) {
 			let finUrl = url.searchParams.get('url');
 			if (!finUrl) {
@@ -219,15 +517,16 @@ export default {
 					headers: { "content-type": "application/json;charset=UTF-8" },
 				});
 			}
-			return fetch(buildProxyRequest(decoded, request, env));
+			return fetchIwaraProxy(decoded, request, env);
 		} else if (url.pathname.startsWith('/file/')) {
 			url.hostname = 'filesq.iwara.tv';
-			return fetch(buildProxyRequest(url.toString(), request, env));
+			return fetchIwaraProxy(url.toString(), request, env);
 		}
 		return env.ASSETS.fetch(request);
 	}
 
 };
+
 
 
 // 网站源码
@@ -268,6 +567,7 @@ const html = `
 			color: #333333;
 			padding-bottom: calc(env(safe-area-inset-bottom, 0) + 80px);
 			min-height: 100vh;
+			position: relative;
 			display: flex;
 			flex-direction: column;
 		}
@@ -387,6 +687,72 @@ const html = `
 			color: #555555;
 			font-size: 18px;
 			font-weight: 300;
+		}
+
+		.presence-panel {
+			position: absolute;
+			top: calc(env(safe-area-inset-top, 0) + 8px);
+			left: calc(env(safe-area-inset-left, 0) + 8px);
+			padding: 8px 12px;
+			display: none;
+			align-items: center;
+			justify-content: flex-start;
+			gap: 5px;
+			border: none;
+			border-radius: 0;
+			background: transparent;
+			box-shadow: none;
+			color: #444444;
+			z-index: 1200;
+			pointer-events: none;
+		}
+
+		.presence-dot {
+			width: 10px;
+			height: 10px;
+			border-radius: 50%;
+			background: #ffb347;
+			box-shadow: 0 0 0 4px rgba(255, 179, 71, 0.18);
+			transition: background 0.2s ease, box-shadow 0.2s ease;
+			animation: presencePulse 1.8s ease-in-out infinite;
+		}
+
+		.presence-panel[data-state="online"] .presence-dot {
+			background: #3AB54A;
+			box-shadow: 0 0 0 4px rgba(58, 181, 74, 0.16);
+			animation-duration: 1.5s;
+		}
+
+		.presence-panel[data-state="error"] .presence-dot {
+			background: #ff4665;
+			box-shadow: 0 0 0 4px rgba(255, 70, 101, 0.16);
+			animation-duration: 1.2s;
+		}
+
+		@keyframes presencePulse {
+			0%,
+			100% {
+				transform: scale(1);
+				opacity: 0.95;
+			}
+
+			50% {
+				transform: scale(1.28);
+				opacity: 0.55;
+			}
+		}
+
+		.presence-label,
+		.presence-unit {
+			font-size: 14px;
+		}
+
+		.presence-count {
+			font-size: 22px;
+			font-weight: 800;
+			color: #ff4665;
+			min-width: 1ch;
+			margin-right: -1px;
 		}
 
 		.link-area {
@@ -570,6 +936,23 @@ const html = `
 
 			.title {
 				font-size: 32px;
+			}
+
+			.presence-panel {
+				top: calc(env(safe-area-inset-top, 0) + 6px);
+				left: calc(env(safe-area-inset-left, 0) + 6px);
+				padding: 5px 7px;
+				width: auto;
+				gap: 4px;
+			}
+
+			.presence-count {
+				font-size: 20px;
+			}
+
+			.presence-label,
+			.presence-unit {
+				font-size: 13px;
 			}
 		}
 
@@ -800,6 +1183,37 @@ const html = `
 			color: #555555;
 		}
 
+		.random-hot-prompt {
+			text-align: left;
+		}
+
+		.random-hot-prompt-text {
+			color: #555555;
+			line-height: 1.6;
+			margin-bottom: 16px;
+		}
+
+		.random-hot-remember {
+			display: flex;
+			align-items: flex-start;
+			gap: 8px;
+			padding: 10px 12px;
+			border-radius: 10px;
+			background: rgba(76, 175, 80, 0.08);
+			color: #444444;
+			line-height: 1.45;
+			cursor: pointer;
+			user-select: none;
+		}
+
+		.random-hot-remember input {
+			width: 18px;
+			height: 18px;
+			margin-top: 1px;
+			accent-color: #4CAF50;
+			flex: 0 0 auto;
+		}
+
 		.swal-button {
 			border-radius: 8px;
 			font-weight: 600;
@@ -926,6 +1340,13 @@ const html = `
 		</div>
 	</div>
 
+	<div id="onlinePresenceCard" class="presence-panel" data-state="pending" aria-live="polite">
+		<span class="presence-dot" aria-hidden="true"></span>
+		<span class="presence-label">全站在线</span>
+		<strong id="onlineCountValue" class="presence-count">--</strong>
+		<span class="presence-unit">会话</span>
+	</div>
+
 	<div id="iframeContainer">
 		<div id="playerActions">
 		<button id="changeButton">切换播放源</button>
@@ -1028,6 +1449,8 @@ const html = `
 			const btnShare = q('#share');
 			const btnToken = q('#token');
 			const saveContainer = q('#saveVideos');
+			const onlinePresenceCard = q('#onlinePresenceCard');
+			const onlineCountValue = q('#onlineCountValue');
 
 			let currentPlayId = '',
 				currentVideoName = '',
@@ -1035,10 +1458,22 @@ const html = `
 				pendingStartTimeSec = 0;
 			let currentYoutubePlayer = null;
 			let youtubeIframeApiPromise = null;
+			const ONLINE_SESSION_STORAGE_KEY = 'iwara_site_presence_session_v1';
+			const ONLINE_WS_PATH = '/online-presence';
+			const ONLINE_PRESENCE_ENABLED = '__ONLINE_PRESENCE_ENABLED__' === 'true';
+			const ONLINE_RECONNECT_MIN_DELAY_MS = 1500;
+			const ONLINE_RECONNECT_MAX_DELAY_MS = 12000;
+			const ONLINE_STALE_AFTER_MS = 30000;
+			const SENSITIVE_PROMPT_DISABLED_KEY = 'sensitive_prompt_disabled_v1';
+			const YOUTUBE_PROMPT_DISABLED_KEY = 'youtube_prompt_disabled_v1';
+			const presenceSessionId = ONLINE_PRESENCE_ENABLED ? getOrCreatePresenceSessionId() : '';
+			let presenceSocket = null;
+			let presenceReconnectTimer = 0;
+			let presenceReconnectAttempts = 0;
+			let presenceLastCountAt = 0;
+			let presenceClosedByClient = false;
 
 			const swalAlert = (text, icon = 'error', button = '关闭') => swal({ text, icon, button });
-                        const SENSITIVE_PROMPT_DISABLED_KEY = 'sensitive_prompt_disabled_v1';
-			const YOUTUBE_PROMPT_DISABLED_KEY = 'youtube_prompt_disabled_v1';
 			const loadingMask = q('#loadingMask');
 			const loadingText = q('#loadingText');
 
@@ -1051,7 +1486,38 @@ const html = `
 				if (loadingMask) loadingMask.classList.remove('show');
 			}
 
-                        function isSensitivePromptDisabled() {
+			function createPresenceSessionId() {
+				try {
+					if (crypto && typeof crypto.randomUUID === 'function') {
+						return crypto.randomUUID().replace(/-/g, '');
+					}
+				} catch (_) { }
+				return (Date.now().toString(36) + Math.random().toString(36).slice(2, 12)).replace(/[^a-z0-9]/gi, '').slice(0, 32);
+			}
+
+			function getOrCreatePresenceSessionId() {
+				try {
+					let current = sessionStorage.getItem(ONLINE_SESSION_STORAGE_KEY) || '';
+					if (!/^[a-zA-Z0-9_-]{12,120}$/.test(current)) {
+						current = createPresenceSessionId();
+						sessionStorage.setItem(ONLINE_SESSION_STORAGE_KEY, current);
+					}
+					return current;
+				} catch (_) {
+					return createPresenceSessionId();
+				}
+			}
+
+			function setPresenceStatus(state = 'pending') {
+				if (onlinePresenceCard) onlinePresenceCard.dataset.state = state;
+			}
+
+			function setPresenceVisibility(visible) {
+				if (!onlinePresenceCard) return;
+				onlinePresenceCard.style.display = visible && ONLINE_PRESENCE_ENABLED ? 'flex' : 'none';
+			}
+
+			function isSensitivePromptDisabled() {
 				try {
 					return localStorage.getItem(SENSITIVE_PROMPT_DISABLED_KEY) === '1';
 				} catch (_) {
@@ -1176,6 +1642,110 @@ const html = `
 					} catch (_) { }
 				}
 				return Math.max(0, Math.floor(Number(videoElement.currentTime) || 0));
+			}
+
+			function applyPresenceCount(count) {
+				if (!onlineCountValue) return;
+				if (Number.isFinite(count) && count >= 0) {
+					onlineCountValue.textContent = String(Math.max(0, Math.floor(count)));
+					presenceLastCountAt = Date.now();
+					setPresenceStatus('online');
+					return;
+				}
+				onlineCountValue.textContent = '--';
+			}
+
+			function clearPresenceReconnectTimer() {
+				if (!presenceReconnectTimer) return;
+				clearTimeout(presenceReconnectTimer);
+				presenceReconnectTimer = 0;
+			}
+
+			function schedulePresenceReconnect() {
+				if (presenceClosedByClient || presenceReconnectTimer) return;
+				const delay = Math.min(ONLINE_RECONNECT_MIN_DELAY_MS * Math.pow(1.8, presenceReconnectAttempts), ONLINE_RECONNECT_MAX_DELAY_MS);
+				presenceReconnectAttempts += 1;
+				presenceReconnectTimer = setTimeout(() => {
+					presenceReconnectTimer = 0;
+					connectSitePresence();
+				}, delay);
+			}
+
+			function handlePresenceMessage(rawValue) {
+				let data;
+				try {
+					data = JSON.parse(String(rawValue || ''));
+				} catch (_) {
+					return;
+				}
+
+				if (data && data.type === 'site_online_count') {
+					applyPresenceCount(Number(data.online));
+				}
+			}
+
+			function connectSitePresence() {
+				if (!onlinePresenceCard) return;
+				if (!('WebSocket' in window)) {
+					setPresenceStatus('error');
+					return;
+				}
+				if (location.protocol !== 'http:' && location.protocol !== 'https:') {
+					setPresenceStatus('error');
+					return;
+				}
+				if (presenceSocket && (presenceSocket.readyState === WebSocket.OPEN || presenceSocket.readyState === WebSocket.CONNECTING)) {
+					return;
+				}
+
+				clearPresenceReconnectTimer();
+				presenceClosedByClient = false;
+				setPresenceStatus('pending');
+
+				const wsScheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+				const wsUrl = wsScheme + '//' + location.host + ONLINE_WS_PATH + '?sid=' + encodeURIComponent(presenceSessionId);
+				const ws = new WebSocket(wsUrl);
+				presenceSocket = ws;
+
+				ws.addEventListener('open', () => {
+					presenceReconnectAttempts = 0;
+					if (Date.now() - presenceLastCountAt > ONLINE_STALE_AFTER_MS) {
+						setPresenceStatus('pending');
+					} else {
+						setPresenceStatus('online');
+					}
+				});
+
+				ws.addEventListener('message', (event) => {
+					handlePresenceMessage(event.data);
+				});
+
+				ws.addEventListener('error', () => {
+					setPresenceStatus('error');
+				});
+
+				ws.addEventListener('close', () => {
+					if (presenceSocket === ws) presenceSocket = null;
+					if (presenceClosedByClient) return;
+
+					if (Date.now() - presenceLastCountAt <= ONLINE_STALE_AFTER_MS) {
+						setPresenceStatus('pending');
+					} else {
+						applyPresenceCount(NaN);
+						setPresenceStatus('error');
+					}
+					schedulePresenceReconnect();
+				});
+			}
+
+			function disconnectSitePresence() {
+				presenceClosedByClient = true;
+				clearPresenceReconnectTimer();
+				if (!presenceSocket) return;
+				try {
+					presenceSocket.close(1000, 'page closing');
+				} catch (_) { }
+				presenceSocket = null;
 			}
 
 			const SENSITIVE_TAG_MAP = {
@@ -1562,7 +2132,7 @@ const html = `
 						return;
 					}
 					const clipboardText = String(await navigator.clipboard.readText() || '').trim();
-					clipboardLog('读取文本正常，长度为', clipboardText.length);
+					clipboardLog('读取文本正常, 长度为', clipboardText.length);
 					const info = extractIwaraVideoInfoFromText(clipboardText);
 					if (!info) {
 						clipboardLog('没有Iwara网站链接！');
@@ -1596,12 +2166,12 @@ const html = `
 			function triggerClipboardCheckOnEntry(_reason = 'entry') {
 				clipboardLog('entry trigger', _reason, 'visibility=', document.visibilityState);
 				if (isClipboardAutoplaySuppressed()) {
-					clipboardLog('entry suppressed by active player overlay');
+					clipboardLog('处于视频播放页面被抑制！');
 					return;
 				}
 				const now = Date.now();
 				if (now - lastClipboardEntryCheckAt < 1200) {
-					clipboardLog('skip by throttle');
+					clipboardLog('节流跳过！');
 					return;
 				}
 				lastClipboardEntryCheckAt = now;
@@ -1617,7 +2187,7 @@ const html = `
 				document.addEventListener('click', function onGestureClick() {
 					document.removeEventListener('click', onGestureClick);
 					clipboardGestureProbeActive = false;
-					clipboardLog('gesture click retry');
+					clipboardLog('手势点击重试！');
 					autoPlayClipboardIwaraLink(true);
 				});
 			}
@@ -1625,11 +2195,14 @@ const html = `
 			function bindClipboardFallbackEvents() {
 				inputVideo.addEventListener('focus', () => autoPlayClipboardIwaraLink(true), { passive: true });
 				inputVideo.addEventListener('click', () => autoPlayClipboardIwaraLink(true), { passive: true });
-
 			}
 
 			document.addEventListener('DOMContentLoaded', () => {
 				setTimeout(() => document.querySelector('.wrap').classList.add('on'), 100);
+				if (ONLINE_PRESENCE_ENABLED) {
+					setPresenceVisibility(true);
+					connectSitePresence();
+				}
 				setTimeout(async () => {
 					const hasValidLocalToken = checkStoredTokenStatusOnLoad();
 					await checkBackendTokenStatusOnLoad(hasValidLocalToken);
@@ -1655,9 +2228,14 @@ const html = `
 			});
 
 			window.addEventListener('pageshow', (evt) => {
+				if (ONLINE_PRESENCE_ENABLED && presenceClosedByClient) connectSitePresence();
 				if (evt && evt.persisted) {
 					triggerClipboardCheckOnEntry('pageshow-bfcache');
 				}
+			});
+
+			window.addEventListener('pagehide', () => {
+				disconnectSitePresence();
 			});
 
 			document.addEventListener('visibilitychange', () => {
@@ -1765,6 +2343,7 @@ const html = `
 				videoElement.pause();
 				videoElement.currentTime = 0;
 				iframeContainer.style.display = 'none';
+				setPresenceVisibility(true);
 				hideLoading();
 				// 清除旧监听器（避免重复绑定）
 				videoElement.onerror = null;
@@ -1881,6 +2460,7 @@ const html = `
 					videoElement.pause();
 					videoElement.currentTime = 0;
 					iframeContainer.style.display = 'none';
+					setPresenceVisibility(false);
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
 					videoSource.src = finalUrl + '#t=' + getStartTimeForPlayback(); // 设置 video 源链接
@@ -1977,45 +2557,46 @@ const html = `
 								btnChangeOrigin.style.display = 'none'; // 隐藏切换源按钮
 
 								destroyYouTubePlayer();
-								const ytIframe = getOrCreateYouTubeIframe();
-								ytIframe.src = buildYouTubeEmbedSrc(ytVideoId, startSeconds);
-								ytIframe.style.display = 'block';
-								iframeContainer.style.display = 'flex';
-								loadYouTubeIframeApi()
-									.then(() => ensureYouTubePlayer(startSeconds))
-									.catch(() => { });
+						const ytIframe = getOrCreateYouTubeIframe();
+						ytIframe.src = buildYouTubeEmbedSrc(ytVideoId, startSeconds);
+						setPresenceVisibility(false);
+						ytIframe.style.display = 'block';
+						iframeContainer.style.display = 'flex';
+						loadYouTubeIframeApi()
+							.then(() => ensureYouTubePlayer(startSeconds))
+							.catch(() => { });
 
-								// 提示用户需要网络支持
-								if (!isYouTubePromptDisabled()) {
+						// 提示用户需要网络支持
+						if (!isYouTubePromptDisabled()) {
+							swal({
+								title: "播放提示",
+								text: "当前视频为 YouTube 视频，请确保你的网络可以访问 YouTube，否则视频将无法正常加载和播放。此外，要修改视频清晰度请在右下角设置（齿轮图标）里自行选择！",
+								icon: "info",
+								buttons: {
+									disable: {
+										text: "不再提示",
+										value: 'disable'
+									},
+									confirm: {
+										text: "我知道了",
+										value: 'ok'
+									}
+								}
+							}).then(action => {
+								if (action === 'disable') {
+									disableYouTubePrompt();
 									swal({
-										title: "播放提示",
-										text: "当前视频为 YouTube 视频，请确保你的网络可以访问 YouTube，否则视频将无法正常加载和播放。此外，要修改视频清晰度请自行选择！",
-										icon: "info",
-										buttons: {
-											disable: {
-												text: "不再提示",
-												value: 'disable'
-											},
-											confirm: {
-												text: "我知道了",
-												value: 'ok'
-											}
-										}
-									}).then(action => {
-										if (action === 'disable') {
-											disableYouTubePrompt();
-											swal({
-												text: '已关闭 YouTube 播放提示，后续将不再弹出！',
-												icon: 'success',
-												buttons: false,
-												timer: 2500
-											});
-										}
+										text: '已关闭 YouTube 播放提示，后续将不再弹出！',
+										icon: 'success',
+										buttons: false,
+										timer: 2500
 									});
 								}
-								return;
-							}
+							});
 						}
+						return;
+					}
+				}
 						// 既没有 file 也没有有效的 embedUrl
 						throw '该视频暂无可用播放资源（file 为空且无有效的 embedUrl）';
 					}
@@ -2156,6 +2737,7 @@ const html = `
 					videoElement.pause();
 					videoElement.currentTime = 0;
 					iframeContainer.style.display = 'none';
+					setPresenceVisibility(false);
 					iframeContainer.style.display = 'flex';
 					const videoSource = document.querySelector('.videoSource');
 					videoSource.src = finalUrl + '#t=' + getStartTimeForPlayback(); // 设置 video 源链接
@@ -2209,6 +2791,29 @@ const html = `
 			}
 
 			// 显示随机热门选择
+			const RANDOM_HOT_CHOICE_COOKIE = 'iwara_random_hot_choice';
+
+			function getCookieValue(name) {
+				const prefix = encodeURIComponent(name) + '=';
+				const item = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith(prefix));
+				if (!item) return '';
+				try {
+					return decodeURIComponent(item.slice(prefix.length));
+				} catch {
+					return '';
+				}
+			}
+
+			function rememberRandomHotChoice(choice) {
+				const secure = location.protocol === 'https:' ? '; Secure' : '';
+				document.cookie = encodeURIComponent(RANDOM_HOT_CHOICE_COOKIE) + '=' + encodeURIComponent(choice) + '; Path=/; SameSite=Lax' + secure;
+			}
+
+			function getRememberedRandomHotChoice() {
+				const choice = getCookieValue(RANDOM_HOT_CHOICE_COOKIE);
+				return choice === 'R18' || choice === 'General' ? choice : '';
+			}
+
 						function isAllowedViewSourceUrl(rawUrl) {
 				try {
 					const u = new URL(rawUrl);
@@ -2226,9 +2831,65 @@ const html = `
 				}
 			}
 
-                      function showRandomHotPrompt() {
+			function playRandomHot(choice) {
+				const sitePrefix = getSiteStoragePrefix();
+				let keyInfo = choice === 'R18' ? (sitePrefix + 'hots') : (sitePrefix + 'generalHots');
+				let keyTs = choice === 'R18' ? (sitePrefix + 'ts') : (sitePrefix + 'generalTs');
+				let rating = choice === 'R18' ? 'ecchi' : 'general';
+				const cache = localStorage.getItem(keyInfo);
+				const timestamp = parseInt(localStorage.getItem(keyTs) || '0');
+				if (cache && !isExpired(timestamp)) {
+					const list = JSON.parse(cache);
+					inputVideo.value = list[getRandomInt(0, list.length - 1)].id;
+					playVideoById();
+				} else {
+					showLoading('正在获取热门视频列表...');
+					fetchJson("/videos?rating=" + rating + "&sort=trending&limit=30", {
+						headers: {
+							'X-Site': getCurrentSiteHost()
+						}
+					})
+						.then(data => {
+							const results = data.results || [];
+							localStorage.setItem(keyInfo, JSON.stringify(results));
+							localStorage.setItem(keyTs, Date.now().toString());
+							if (results.length) {
+								inputVideo.value = results[getRandomInt(0, results.length - 1)].id;
+								playVideoById();
+							}
+						})
+						.catch(err => swalAlert('出现错误：' + err))
+						.finally(() => hideLoading());
+				}
+			}
+
+			function showRandomHotPrompt() {
+				const rememberedChoice = getRememberedRandomHotChoice();
+				if (rememberedChoice) {
+					playRandomHot(rememberedChoice);
+					return;
+				}
+
+				const promptContent = document.createElement('div');
+				promptContent.className = 'random-hot-prompt';
+
+				const promptText = document.createElement('p');
+				promptText.className = 'random-hot-prompt-text';
+				promptText.textContent = '随机热门视频分为普通和 R18 内容，您要随机播放哪种内容？';
+				promptContent.appendChild(promptText);
+
+				const rememberLabel = document.createElement('label');
+				rememberLabel.className = 'random-hot-remember';
+				const rememberCheckbox = document.createElement('input');
+				rememberCheckbox.type = 'checkbox';
+				rememberCheckbox.checked = false;
+				const rememberText = document.createElement('span');
+				rememberText.textContent = '这次打开期间记住选择（下次点“随机热门”不再询问）';
+				rememberLabel.append(rememberCheckbox, rememberText);
+				promptContent.appendChild(rememberLabel);
+
 				swal({
-					text: '随机热门视频分为普通和 R18 内容，您要随机播放哪种内容？',
+					content: promptContent,
 					icon: 'info',
 					buttons: {
 						cancel: {
@@ -2246,35 +2907,8 @@ const html = `
 					}
 				}).then(choice => {
 					if (!choice) return;
-					const sitePrefix = getSiteStoragePrefix();
-					let keyInfo = choice === 'R18' ? (sitePrefix + 'hots') : (sitePrefix + 'generalHots');
-					let keyTs = choice === 'R18' ? (sitePrefix + 'ts') : (sitePrefix + 'generalTs');
-					let rating = choice === 'R18' ? 'ecchi' : 'general';
-					const cache = localStorage.getItem(keyInfo);
-					const timestamp = parseInt(localStorage.getItem(keyTs) || '0');
-					if (cache && !isExpired(timestamp)) {
-						const list = JSON.parse(cache);
-						inputVideo.value = list[getRandomInt(0, list.length - 1)].id;
-						playVideoById();
-					} else {
-						showLoading('正在获取热门视频列表...');
-						fetchJson("/videos?rating=" + rating + "&sort=trending&limit=30", {
-							headers: {
-								'X-Site': getCurrentSiteHost()
-							}
-						})
-							.then(data => {
-								const results = data.results || [];
-								localStorage.setItem(keyInfo, JSON.stringify(results));
-								localStorage.setItem(keyTs, Date.now().toString());
-								if (results.length) {
-									inputVideo.value = results[getRandomInt(0, results.length - 1)].id;
-									playVideoById();
-								}
-							})
-							.catch(err => swalAlert('出现错误：' + err))
-							.finally(() => hideLoading());
-					}
+					if (rememberCheckbox.checked) rememberRandomHotChoice(choice);
+					playRandomHot(choice);
 				});
 			}
 
@@ -2581,11 +3215,12 @@ const html = `
 
 				try {
 					const res = await fetch('/token-status', { headers: { Accept: 'application/json' } });
+					const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
+					if (retryAfter > 0) {
+						localStorage.setItem(nextCheckKey, (Date.now() + retryAfter * 1000).toString());
+					}
 					if (res.status === 204) {
-						const retryAfter = parseInt(res.headers.get('Retry-After') || '0', 10);
-						if (retryAfter > 0) {
-							localStorage.setItem(nextCheckKey, (Date.now() + retryAfter * 1000).toString());
-						} else {
+						if (retryAfter <= 0) {
 							localStorage.removeItem(nextCheckKey);
 						}
 						return;
@@ -2598,6 +3233,15 @@ const html = `
 							swal({
 								title: '令牌已失效',
 								text: data.message || '后端设置的token已过期！',
+								icon: 'warning',
+								button: '知道了'
+							});
+						}
+					} else if (data && (data.code === 'backend_login_failed' || data.code === 'backend_login_misconfigured')) {
+						if (!hasValidLocalToken) {
+							swal({
+								title: data.code === 'backend_login_misconfigured' ? '自动登录配置不完整' : '自动登录失败',
+								text: data.message || '请站点管理员检查 Iwara 自动登录配置！',
 								icon: 'warning',
 								button: '知道了'
 							});

@@ -14,6 +14,7 @@ const BASIC_AUTH_USER = process.env.BASIC_AUTH_USER || ""; // 设置访问的用
 const BASIC_AUTH_PASS = process.env.BASIC_AUTH_PASS || ""; // 设置访问的密码
 const IWARA_AUTHORIZATION = process.env.IWARA_AUTHORIZATION || ""; // 设置默认使用Iwara账号的Token
 const BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS = 86400; // 前端请求检测后端Token有效期间隔(单位秒，默认1天，后端未设置token生效)
+const CORS_BRIDGE_BASE_URL = "https://api.cors.syrins.tech/?url=";
 
 // ---------------------------------------------------
 // 中间件
@@ -117,7 +118,7 @@ let indexHTML = "<h1>Loading...</h1>";
 try {
   indexHTML = fs.readFileSync("./index.html", "utf8");
 } catch (err) {
-  console.error("index.html 读取失败：, err);
+  console.error("index.html 读取失败：", err);
 }
 
 // 后端默认 token 状态检测（给前端访问时提示用）
@@ -181,6 +182,10 @@ function isIwaraUrl(encodedUrl) {
   return isAllowedViewUrl(encodedUrl);
 }
 
+function buildCorsBridgeUrl(targetUrl) {
+  return CORS_BRIDGE_BASE_URL + encodeURIComponent(targetUrl);
+}
+
 // ---------------------------------------------------
 // 通用 JSON 代理
 // ---------------------------------------------------
@@ -202,18 +207,17 @@ async function proxyJSON(req, res, targetUrl) {
 
     res.status(resp.status).send(data);
   } catch (err) {
-    console.error("proxyJSON 发生错误：, err);
+    console.error("proxyJSON 发生错误：", err);
     res.status(500).json({ error: err.message || String(err) });
   }
 }
 
 // ---------------------------------------------------
-// /video → 反代 apiq.iwara.tv
+// /video → 通过 CorsBridge 反代 apiq.iwara.tv
 // ---------------------------------------------------
 app.use(/^\/video(.*)/, async (req, res) => {
-  const target =
-    "https://api.allorigins.win/raw?url=" +
-    encodeURIComponent("https://apiq.iwara.tv" + req.originalUrl);
+  const targetUrl = "https://apiq.iwara.tv" + req.originalUrl;
+  const target = buildCorsBridgeUrl(targetUrl);
 
   await proxyJSON(req, res, target);
 });

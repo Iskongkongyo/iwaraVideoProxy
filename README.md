@@ -162,7 +162,9 @@
 | **Token 有效** | `204 No Content` |
 | **Token 已过期** | 返回 `{"code": "backend_token_expired", ...}`，前端据此引导用户处理 |
 | **自动登录配置不完整** | 返回 `{"code": "backend_login_misconfigured", ...}` |
-| **自动登录失败** | 返回 `{"code": "backend_login_failed", ...}`，并进入 60 秒重试冷却 |
+| **登录凭据被拒绝** | 返回 `backend_login_credentials_rejected`，前端明确提示检查登录邮箱和密码 |
+| **接口响应缺少 Token** | 返回 `backend_login_invalid_response`，前端提示管理员检查接口变化 |
+| **限流或上游暂时异常** | 返回 `backend_login_rate_limited`、`backend_login_upstream_blocked` 或 `backend_login_temporarily_unavailable`，进入约 60 秒冷却但不弹出误导性的配置错误提示 |
 
 #### 自动登录排查
 
@@ -192,7 +194,10 @@ curl.exe -sS "https://你的域名/token-status?debug=1"
 | `lastResponseContentType` | 正常接口通常为 JSON；`403` 且为 `text/html` 通常表示返回了挑战页而不是登录 JSON |
 | `authorizationSource` | `auto_login_cache` 表示自动登录 Token 已获取并在当前 Worker 实例缓存 |
 | `cachedTokenAvailable` | 为 `true` 表示响应内找到了可用 Token |
+| `failureReason` | 区分 `rate_limited`、`credentials_rejected`、`upstream_blocked`、`upstream_unavailable`、`network_error` 和 `invalid_response` |
 | `retryAfterSeconds` | 失败后的剩余冷却秒数；最多约 60 秒 |
+
+浏览器只会针对能够明确判断的配置问题、凭据被拒绝或登录响应缺少 Token 弹窗。`429` 限流、`403` 上游拦截、网络错误和上游 `5xx` 会静默等待后续请求自动恢复，避免出现“受限视频可以观看，但首页仍提示配置错误”的误报。
 
 同时可在另一个终端实时查看 Worker 的脱敏日志：
 
@@ -222,17 +227,19 @@ Worker 可以使用 [Cloudflare GraphQL Analytics](https://developers.cloudflare
 
 ### 📢 远程通知
 
-设置 `NOTICE_API_URL` 后，Worker 会读取并缓存通知 JSON。通知正文按纯文本展示，避免远程内容注入脚本；同一通知默认每天最多出现一次，用户也可以选择“不再提示”。
+设置 `NOTICE_API_URL` 后，Worker 会读取并缓存通知 JSON。通知正文支持经过安全过滤的常用 HTML；同一通知默认每天最多出现一次，用户也可以选择“不再提示”。
 
 ```json
 {
   "hasNotice": true,
   "noticeId": "maintenance-2026-09",
   "title": "维护通知",
-  "content": "今晚 23:00 进行短暂维护。",
+  "content": "<h3>维护通知</h3><p>今晚 23:00 进行短暂维护。<br><a href=\"https://example.com/status\" target=\"_blank\">查看状态</a></p><img src=\"https://example.com/notice.jpg\" alt=\"维护通知\">",
   "showOnce": false
 }
 ```
+
+支持的常用标签包括 `h1`–`h6`、`p`、`br`、`a`、`img`、粗体/斜体、列表、引用、代码块、折叠内容和表格等。链接仅允许 HTTP(S)、邮箱、电话或站内相对地址；图片仅允许 HTTP(S) 或站内相对地址。`script`、`style`、`iframe`、表单、内联事件（如 `onclick`）、危险 URL 和未列入白名单的属性会被删除。
 
 可通过 `NOTICE_API_CACHE_TTL_SECONDS` 调整缓存时间，默认 `300` 秒。`showOnce: true` 表示该浏览器仅显示一次；更换 `noticeId` 可以发布一条新通知。
 

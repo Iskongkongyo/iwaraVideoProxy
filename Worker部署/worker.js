@@ -25,6 +25,7 @@ let lastIwaraLoginAttemptAt = '';
 let lastIwaraLoginResponseStatus = null;
 let lastIwaraLoginResponseContentType = '';
 let lastIwaraLoginSucceededAt = '';
+let lastIwaraLoginFailureReason = '';
 
 function pickEnvOrDefault(envValue, defaultValue = '') {
 	const v = typeof envValue === 'string' ? envValue.trim() : '';
@@ -202,6 +203,58 @@ function safeIwaraLoginErrorMessage(error = lastIwaraLoginError) {
 		.slice(0, 300);
 }
 
+function classifyIwaraLoginFailure(responseStatus = lastIwaraLoginResponseStatus) {
+	const status = Number(responseStatus);
+	if (status === 429) return 'rate_limited';
+	if (status === 400 || status === 401) return 'credentials_rejected';
+	if (status === 403) return 'upstream_blocked';
+	if (status >= 500 && status <= 599) return 'upstream_unavailable';
+	if (status >= 200 && status <= 299) return 'invalid_response';
+	if (!Number.isFinite(status) || status <= 0) return 'network_error';
+	return 'unknown';
+}
+
+function getIwaraLoginRetryAfterSeconds() {
+	return Math.max(0, Math.ceil((iwaraLoginRetryAfter - Date.now()) / 1000));
+}
+
+function getIwaraLoginFailurePublicInfo(reason = lastIwaraLoginFailureReason) {
+	switch (reason) {
+		case 'credentials_rejected':
+			return {
+				code: 'backend_login_credentials_rejected',
+				message: 'Iwara登录凭据被拒绝，请站点管理员检查登录邮箱和密码。',
+				shouldWarnUser: true
+			};
+		case 'invalid_response':
+			return {
+				code: 'backend_login_invalid_response',
+				message: 'Iwara登录接口响应中没有可用Token，请站点管理员检查接口是否发生变化。',
+				shouldWarnUser: true
+			};
+		case 'rate_limited':
+			return {
+				code: 'backend_login_rate_limited',
+				message: 'Iwara登录接口暂时限流，Worker会在冷却结束后自动重试。',
+				shouldWarnUser: false
+			};
+		case 'upstream_blocked':
+			return {
+				code: 'backend_login_upstream_blocked',
+				message: 'Iwara登录接口暂时受到上游访问限制，Worker稍后会自动重试。',
+				shouldWarnUser: false
+			};
+		case 'upstream_unavailable':
+		case 'network_error':
+		default:
+			return {
+				code: 'backend_login_temporarily_unavailable',
+				message: 'Iwara登录接口暂时不可用，Worker稍后会自动重试。',
+				shouldWarnUser: false
+			};
+	}
+}
+
 function logIwaraLoginEvent(level, event, details = {}) {
 	const message = JSON.stringify({ event, ...details });
 	if (level === 'warn') console.warn('[iwara-auto-login]', message);
@@ -220,7 +273,7 @@ function getIwaraLoginDiagnostics(env, backendStatus) {
 	const configuredAuthorization = normalizeIwaraAuthorization(cfg.iwaraAuthorization);
 	const configuredTokenIsFresh = isIwaraAuthorizationFresh(configuredAuthorization, 0);
 	const cachedTokenIsFresh = isIwaraAuthorizationFresh(cachedAutoIwaraAuthorization, 0);
-	const retryAfterSeconds = Math.max(0, Math.ceil((iwaraLoginRetryAfter - Date.now()) / 1000));
+	const retryAfterSeconds = getIwaraLoginRetryAfterSeconds();
 
 	return {
 		status: backendStatus?.status || 'unknown',
@@ -243,6 +296,7 @@ function getIwaraLoginDiagnostics(env, backendStatus) {
 			cachedTokenExpiresAt: getAuthorizationExpiry(cachedAutoIwaraAuthorization),
 			loginInFlight: !!iwaraLoginPromise,
 			retryAfterSeconds,
+			failureReason: lastIwaraLoginFailureReason || null,
 			lastError: safeIwaraLoginErrorMessage() || null
 		}
 	};
@@ -320,6 +374,7 @@ async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 			cachedAutoIwaraAuthorization = authorization;
 			iwaraLoginRetryAfter = 0;
 			lastIwaraLoginError = null;
+			lastIwaraLoginFailureReason = '';
 			lastIwaraLoginSucceededAt = new Date().toISOString();
 			logIwaraLoginEvent('info', 'login_succeeded', {
 				tokenType: decodeJwtPayload(authorization) ? 'jwt' : 'opaque',
@@ -330,8 +385,10 @@ async function getAutoIwaraAuthorization(env, forceRefresh = false) {
 			invalidateAutoIwaraAuthorization();
 			iwaraLoginRetryAfter = Date.now() + IWARA_LOGIN_RETRY_COOLDOWN_MS;
 			lastIwaraLoginError = error instanceof Error ? error : new Error(String(error));
+			lastIwaraLoginFailureReason = classifyIwaraLoginFailure();
 			logIwaraLoginEvent('warn', 'login_failed', {
 				error: safeIwaraLoginErrorMessage(lastIwaraLoginError),
+				reason: lastIwaraLoginFailureReason,
 				retryAfterSeconds: Math.ceil(IWARA_LOGIN_RETRY_COOLDOWN_MS / 1000)
 			});
 			throw lastIwaraLoginError;
@@ -392,7 +449,11 @@ async function getBackendTokenStatus(env) {
 			await getAutoIwaraAuthorization(env);
 			return { status: 'valid' };
 		} catch (_) {
-			return { status: 'login_failed' };
+			return {
+				status: 'login_failed',
+				failureReason: lastIwaraLoginFailureReason || classifyIwaraLoginFailure(),
+				retryAfterSeconds: getIwaraLoginRetryAfterSeconds() || Math.ceil(IWARA_LOGIN_RETRY_COOLDOWN_MS / 1000)
+			};
 		}
 	}
 	if (!token) return { status: 'not_configured' };
@@ -665,10 +726,17 @@ async function renderHtml(env) {
 	]);
 	const retryAfterSeconds = backendTokenStatus.status === 'not_configured'
 		? BACKEND_TOKEN_STATUS_RETRY_AFTER_SECONDS
-		: (backendTokenStatus.status === 'login_failed' || backendTokenStatus.status === 'login_misconfigured' ? 60 : 0);
+		: (backendTokenStatus.status === 'login_failed'
+			? (backendTokenStatus.retryAfterSeconds || Math.ceil(IWARA_LOGIN_RETRY_COOLDOWN_MS / 1000))
+			: (backendTokenStatus.status === 'login_misconfigured' ? 60 : 0));
+	const loginFailureInfo = backendTokenStatus.status === 'login_failed'
+		? getIwaraLoginFailurePublicInfo(backendTokenStatus.failureReason)
+		: null;
 	const bootstrapPayload = {
 		status: backendTokenStatus.status,
-		retryAfterSeconds
+		retryAfterSeconds,
+		failureReason: backendTokenStatus.failureReason || '',
+		message: loginFailureInfo?.message || ''
 	};
 	return html
 		.replace('__ONLINE_PRESENCE_ENABLED__', getOnlineCounterStub(env) ? 'true' : 'false')
@@ -879,10 +947,13 @@ export default {
 				}, 200, { 'Retry-After': '60' });
 			}
 			if (status.status === 'login_failed') {
+				const failureInfo = getIwaraLoginFailurePublicInfo(status.failureReason);
 				return jsonResponse({
-					code: 'backend_login_failed',
-					message: 'Iwara自动登录失败，请站点管理员检查账号、密码或上游访问状态！'
-				}, 200, { 'Retry-After': '60' });
+					code: failureInfo.code,
+					reason: status.failureReason || 'unknown',
+					message: failureInfo.message,
+					shouldWarnUser: failureInfo.shouldWarnUser
+				}, 200, { 'Retry-After': String(status.retryAfterSeconds || 60) });
 			}
 			return new Response(JSON.stringify({ code: 'backend_token_expired', message: '后端设置的token已过期！' }), {
 				status: 200,
@@ -1908,6 +1979,28 @@ const html = `
 			const NOTICE_LAST_DAILY_DAY_KEY = 'site_notice_daily_last_day_v1';
 			const NOTICE_LAST_ONCE_ID_KEY = 'site_notice_once_last_id_v1';
 			const NOTICE_DISABLED_ID_KEY = 'site_notice_disabled_id_v1';
+			const NOTICE_ALLOWED_TAGS = new Set([
+				'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr',
+				'a', 'img', 'strong', 'b', 'em', 'i', 'u', 's', 'del',
+				'blockquote', 'ul', 'ol', 'li', 'code', 'pre', 'kbd',
+				'small', 'mark', 'sub', 'sup', 'q', 'details', 'summary',
+				'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+				'div', 'span'
+			]);
+			const NOTICE_DROP_CONTENT_TAGS = new Set([
+				'script', 'style', 'iframe', 'object', 'embed', 'svg', 'math',
+				'form', 'input', 'button', 'textarea', 'select', 'option',
+				'link', 'meta', 'base', 'template'
+			]);
+			const NOTICE_ALLOWED_ATTRIBUTES = {
+				a: new Set(['href', 'title', 'target']),
+				img: new Set(['src', 'alt', 'title', 'width', 'height']),
+				ol: new Set(['start', 'reversed']),
+				li: new Set(['value']),
+				details: new Set(['open']),
+				th: new Set(['colspan', 'rowspan']),
+				td: new Set(['colspan', 'rowspan'])
+			};
 			const presenceSessionId = ONLINE_PRESENCE_ENABLED ? getOrCreatePresenceSessionId() : '';
 			let presenceSocket = null;
 			let presenceReconnectTimer = 0;
@@ -2179,13 +2272,94 @@ const html = `
 				} catch (_) { }
 			}
 
+			function isSafeNoticeUrl(value, tagName) {
+				const raw = String(value || '').trim();
+				if (!raw) return false;
+				try {
+					const parsed = new URL(raw, location.href);
+					if (tagName === 'img') return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+					return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+						|| parsed.protocol === 'mailto:' || parsed.protocol === 'tel:';
+				} catch (_) {
+					return false;
+				}
+			}
+
+			function sanitizeNoticeNumericAttribute(element, attributeName, maxValue = 4096) {
+				if (!element.hasAttribute(attributeName)) return;
+				const raw = element.getAttribute(attributeName) || '';
+				const value = Number.parseInt(raw, 10);
+				if (!/^\d+$/.test(raw) || !Number.isFinite(value) || value < 1 || value > maxValue) {
+					element.removeAttribute(attributeName);
+				}
+			}
+
+			function sanitizeNoticeTree(parent) {
+				for (const node of Array.from(parent.childNodes || [])) {
+					if (node.nodeType === Node.COMMENT_NODE) {
+						node.remove();
+						continue;
+					}
+					if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+					const tagName = String(node.tagName || '').toLowerCase();
+					if (NOTICE_DROP_CONTENT_TAGS.has(tagName)) {
+						node.remove();
+						continue;
+					}
+					if (!NOTICE_ALLOWED_TAGS.has(tagName)) {
+						sanitizeNoticeTree(node);
+						node.replaceWith(...Array.from(node.childNodes));
+						continue;
+					}
+
+					const allowedAttributes = NOTICE_ALLOWED_ATTRIBUTES[tagName] || new Set();
+					for (const attribute of Array.from(node.attributes || [])) {
+						if (!allowedAttributes.has(attribute.name.toLowerCase())) {
+							node.removeAttribute(attribute.name);
+						}
+					}
+
+					if (tagName === 'a') {
+						if (!isSafeNoticeUrl(node.getAttribute('href'), tagName)) node.removeAttribute('href');
+						const target = String(node.getAttribute('target') || '').toLowerCase();
+						if (target && target !== '_blank' && target !== '_self') node.removeAttribute('target');
+						if (node.getAttribute('target') === '_blank') node.setAttribute('rel', 'noopener noreferrer nofollow');
+					}
+					if (tagName === 'img') {
+						if (!isSafeNoticeUrl(node.getAttribute('src'), tagName)) {
+							node.remove();
+							continue;
+						}
+						sanitizeNoticeNumericAttribute(node, 'width');
+						sanitizeNoticeNumericAttribute(node, 'height');
+						node.setAttribute('loading', 'lazy');
+						node.setAttribute('decoding', 'async');
+						node.setAttribute('referrerpolicy', 'no-referrer');
+						node.style.maxWidth = '100%';
+						node.style.height = 'auto';
+						node.style.borderRadius = '8px';
+					}
+					if (tagName === 'ol') sanitizeNoticeNumericAttribute(node, 'start', 1000000);
+					if (tagName === 'li') sanitizeNoticeNumericAttribute(node, 'value', 1000000);
+					if (tagName === 'th' || tagName === 'td') {
+						sanitizeNoticeNumericAttribute(node, 'colspan', 100);
+						sanitizeNoticeNumericAttribute(node, 'rowspan', 100);
+					}
+					sanitizeNoticeTree(node);
+				}
+			}
+
 			function createNoticeContentNode(content) {
 				const wrapper = document.createElement('div');
 				wrapper.style.textAlign = 'left';
 				wrapper.style.lineHeight = '1.7';
 				wrapper.style.wordBreak = 'break-word';
-				wrapper.style.whiteSpace = 'pre-wrap';
-				wrapper.textContent = String(content || '');
+				const template = document.createElement('template');
+				template.innerHTML = String(content || '');
+				sanitizeNoticeTree(template.content);
+				wrapper.style.whiteSpace = template.content.querySelector('*') ? 'normal' : 'pre-wrap';
+				wrapper.appendChild(template.content);
 				return wrapper;
 			}
 
@@ -3898,6 +4072,10 @@ const html = `
 			// 页面访问时检查后端 Token 状态（优先使用首页内嵌结果，避免额外请求）
 			async function checkBackendTokenStatusOnLoad(hasValidLocalToken = false, initialStatus = null) {
 				const nextCheckKey = 'backendTokenStatusNextCheckAt';
+				if (initialStatus && initialStatus.status === 'valid') {
+					localStorage.removeItem(nextCheckKey);
+					return;
+				}
 				const now = Date.now();
 				const nextCheckAt = parseInt(localStorage.getItem(nextCheckKey) || '0', 10);
 				if (nextCheckAt && now < nextCheckAt) return;
@@ -3911,22 +4089,29 @@ const html = `
 					}
 				};
 
-				const showStatusWarning = (status, message, retryCount = 0) => {
+				const shouldWarnForLoginFailure = failureReason => {
+					return failureReason === 'credentials_rejected' || failureReason === 'invalid_response';
+				};
+
+				const showStatusWarning = (status, message, failureReason = '', retryCount = 0) => {
 					if (hasValidLocalToken) return;
 					if (document.querySelector('.swal-overlay--show-modal')) {
-						if (retryCount < 20) setTimeout(() => showStatusWarning(status, message, retryCount + 1), 500);
+						if (retryCount < 20) setTimeout(() => showStatusWarning(status, message, failureReason, retryCount + 1), 500);
 						return;
 					}
 					const loginIssue = status === 'login_failed' || status === 'login_misconfigured';
+					const loginTitle = status === 'login_misconfigured'
+						? '自动登录配置不完整'
+						: (failureReason === 'credentials_rejected' ? '自动登录凭据被拒绝' : '自动登录接口异常');
 					swal({
-						title: status === 'login_misconfigured' ? '自动登录配置不完整' : (loginIssue ? '自动登录失败' : '令牌已失效'),
-						text: message || (loginIssue ? '请站点管理员检查 Iwara 自动登录配置！' : '后端设置的token已过期！'),
+						title: loginIssue ? loginTitle : '令牌已失效',
+						text: message || (loginIssue ? '请站点管理员检查 Iwara 自动登录状态！' : '后端设置的token已过期！'),
 						icon: 'warning',
 						button: '知道了'
 					});
 				};
 
-				const handleStatus = (status, retryAfterSeconds = 0, message = '') => {
+				const handleStatus = (status, retryAfterSeconds = 0, message = '', failureReason = '') => {
 					if (status === 'not_configured') {
 						applyRetryAfter(retryAfterSeconds || BACKEND_TOKEN_STATUS_DEFAULT_RETRY_SECONDS);
 						return true;
@@ -3935,16 +4120,25 @@ const html = `
 						localStorage.removeItem(nextCheckKey);
 						return true;
 					}
-					if (status === 'expired' || status === 'login_failed' || status === 'login_misconfigured') {
+					if (status === 'login_failed') {
+						applyRetryAfter(retryAfterSeconds || 60);
+						if (shouldWarnForLoginFailure(failureReason)) {
+							showStatusWarning(status, message, failureReason);
+						} else {
+							console.info('[backend-token-status] 自动登录暂时不可用，已静默等待后续重试：', failureReason || 'unknown');
+						}
+						return true;
+					}
+					if (status === 'expired' || status === 'login_misconfigured') {
 						applyRetryAfter(retryAfterSeconds);
-						showStatusWarning(status, message);
+						showStatusWarning(status, message, failureReason);
 						return true;
 					}
 					return false;
 				};
 
 				if (initialStatus && typeof initialStatus === 'object'
-					&& handleStatus(initialStatus.status, initialStatus.retryAfterSeconds)) {
+					&& handleStatus(initialStatus.status, initialStatus.retryAfterSeconds, initialStatus.message, initialStatus.failureReason)) {
 					return;
 				}
 
@@ -3960,9 +4154,14 @@ const html = `
 					const statusMap = {
 						backend_token_expired: 'expired',
 						backend_login_failed: 'login_failed',
+						backend_login_credentials_rejected: 'login_failed',
+						backend_login_invalid_response: 'login_failed',
+						backend_login_rate_limited: 'login_failed',
+						backend_login_upstream_blocked: 'login_failed',
+						backend_login_temporarily_unavailable: 'login_failed',
 						backend_login_misconfigured: 'login_misconfigured'
 					};
-					handleStatus(statusMap[data && data.code] || '', retryAfter, data && data.message);
+					handleStatus(statusMap[data && data.code] || '', retryAfter, data && data.message, data && data.reason);
 				} catch (err) {
 					// 后端状态检测失败时静默处理，避免影响正常使用
 				}

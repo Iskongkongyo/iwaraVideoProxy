@@ -1,6 +1,6 @@
 name = "iwara-proxy" # 可修改为你的 Worker 服务名
 main = "worker.js"
-compatibility_date = "2026-03-08"
+compatibility_date = "2026-11-01"
 
 # 实时会话数默认关闭。需要启用时，取消下面 7 行的注释后再部署。
 # Worker 会根据 ONLINE_COUNTER 是否存在自动切换界面和连接逻辑。

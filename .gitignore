@@ -6,3 +6,38 @@ CF部署/
 
 # 旧文件
 *.old
+
+# 本地配置与凭据（保留配置示例）
+.env
+.env.*
+!.env.example
+!.env.*.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+!.dev.vars.*.example
+
+# Node.js 依赖与 Wrangler 本地状态
+node_modules/
+.wrangler/
+
+# Python 虚拟环境与缓存
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 测试覆盖率与运行日志
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+*.log
+
+# 系统生成文件
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  一个支持 <strong>边缘计算、第三方反代与私有服务器部署</strong> 的 Iwara 视频代理及播放解决方案。
+  一个支持 <strong>Cloudflare Worker、Node.js 与 Python 私有部署</strong> 的 Iwara 视频代理及播放解决方案。
 </p>
 
 <p align="center">
@@ -70,11 +70,12 @@
 - 🔐 **前后端 Token 机制**：支持前端自定义 Token 与后端默认 Token，并按优先级自动选择。
 - 🛡️ **全局访问保护**：可通过 Basic Auth 为站点及相关接口增加统一认证。
 - 🔍 **Token 状态监控**：后端提供 `/token-status`，用于检测默认 Token 的配置与有效状态。
-- 🔄 **Iwara 自动登录**：默认 Token 缺失、过期或被拒绝时，可由 Worker 安全刷新共享 Token。
+- 🔄 **Iwara 自动登录**：默认 Token 缺失、过期或被拒绝时，可由后端安全刷新共享 Token。
 - 📢 **远程通知**：可从 JSON 接口读取站点通知，支持每日一次、仅一次和用户关闭提示。
 - 📊 **额度保护**：可查询 Cloudflare Analytics，在每日请求量接近上限时让新会话自动改用视频直连。
 - 🚧 **播放接口安全校验**：`/view` 对域名、路径、查询参数和请求方法实施严格限制。
-- 👥 **可选实时会话数**：Cloudflare Worker 可通过 Durable Objects + WebSocket 开启在线会话统计，并在用户交互或等待 8 秒后延迟连接。
+- 👥 **实时会话数**：Cloudflare Worker 可通过 Durable Objects + WebSocket 开启在线会话统计，Node.js 与 Python 版内置 WebSocket 统计；前端在用户交互或等待 8 秒后延迟连接。
+- 🧩 **可选挑战处理**：Node.js 与 Python 私有部署均支持 FlareSolverr，可在上游返回 Cloudflare 挑战时尝试解盾并重试。
 - 📋 **剪切板链接识别**：在获得浏览器权限后，可自动识别剪切板中的 Iwara 视频链接并提示。
 
 ---
@@ -85,11 +86,12 @@
 
 | 文件 / 目录 | 用途 |
 | :-- | :-- |
-| `index.html` | **核心前端**：HTML / CSS / JavaScript 单文件，无需复杂构建流程 |
+| `Worker部署/worker.js` | **Worker 核心**：包含后端业务逻辑与完整 HTML / CSS / JavaScript 前端，无需复杂构建流程 |
 | `sweetalert.min.js` | **UI 组件**：提供更友好的前端弹窗交互 |
 | `Worker部署/` | **Cloudflare Worker 统一版**：可选开启全站实时会话数，无需维护两份 Worker 代码 |
-| `第三方反代部署/` | **混合部署方案**：基于 Node.js，通过 CorsBridge 进行请求转发 |
-| `完全私有部署/` | **完全私有方案**：提供 Node.js 与 Python 两套后端环境，便于完全掌控流量 |
+| `完全私有部署/Nodejs环境/` | **Node.js 私有部署**：`server.mjs` 适配运行时，`worker.mjs` 包含业务逻辑与前端，附有配置示例和部署说明 |
+| `完全私有部署/Python环境/` | **Python 私有部署**：`server.py` 启动服务，`worker.py` 实现业务逻辑，`index.html` 提供完整前端，附有配置示例、部署说明与本地测试 |
+| `浏览器脚本/` | **浏览器用户脚本**：提供 Iwara 视频反代加速脚本 |
 
 ---
 
@@ -101,8 +103,9 @@
 | :-- | :-- |
 | **前端** | HTML5、CSS3（Modern UI）、JavaScript（ES6+）、SweetAlert |
 | **Worker 版** | Cloudflare Workers（V8 Runtime）、Fetch API |
-| **Node.js 版** | Express.js、node-fetch、CORS |
-| **Python 版** | Flask、Requests、Cloudscraper（绕过检测） |
+| **Node.js 版** | Node.js HTTP 服务、原生 Fetch API、`ws`，可选 `impit` 指纹回放 |
+| **Python 版** | `aiohttp` 异步 HTTP / WebSocket 服务，可选 `curl_cffi` 指纹回放 |
+| **私有部署挑战处理** | 可选 FlareSolverr，支持 clearance 缓存、重试与浏览器内容直取 |
 
 ---
 
@@ -124,15 +127,15 @@
 
 通过环境变量 `BASIC_AUTH_USER` 与 `BASIC_AUTH_PASS` 启用。
 
-- **作用范围**：全局生效，可保护首页、`/video*`、`/file*`、`/view` 等接口。
+- **作用范围**：全局生效，可保护首页、`/video*`、`/file*`、`/view`、状态接口与在线人数 WebSocket。
 - **默认行为**：两个变量留空时不启用 Basic Auth，无需密码即可访问。
 
 ### 🤖 智能 Token 处理
 
 - **后端默认 Token**：可通过 `IWARA_AUTHORIZATION` 设置站点级默认 Token。
-- **Worker 自动登录**：同时配置 `IWARA_USERNAME` 与 `IWARA_PASSWORD` 后，默认 Token 缺失或已过期时会通过 Iwara 官方登录接口自动获取新 Token。
-- **自动刷新**：上游明确返回 `401` 时，Worker 会重新登录并只重试原请求一次；并发登录会自动合并，失败后冷却 60 秒。
-- **内存缓存**：自动获取的 Token 只缓存在当前 Worker 实例内，不写入浏览器、日志或项目文件；新实例会按需重新登录。
+- **后端自动登录**：Worker、Node.js 与 Python 版均支持；同时配置 `IWARA_USERNAME` 与 `IWARA_PASSWORD` 后，默认 Token 缺失或即将过期时会通过 Iwara 官方登录接口自动获取新 Token。
+- **自动刷新**：上游明确返回 `401` 时，后端会重新登录并只重试原请求一次；并发登录会自动合并，失败后冷却 60 秒。前端自定义 Token 不触发后端续期。
+- **内存缓存**：自动获取的 Token 只缓存在当前 Worker 实例或私有服务进程内，不写入浏览器、日志或项目文件；新实例或进程重启后会按需重新登录。
 - **自动标准化**：系统会自动处理 JWT；无论是否包含 `Bearer ` 前缀，都会标准化为正确格式。
 
 ### 🚦 Token 优先级
@@ -140,8 +143,8 @@
 优先级由高到低：
 
 1. **前端 Token**：用户在页面中自行填写的 `CustomizedToken`。
-2. **有效的后端默认 Token**：环境变量 `IWARA_AUTHORIZATION`，或 Worker 代码中的硬编码默认值 `DEFAULT_IWARA_AUTHORIZATION`。
-3. **Worker 自动登录 Token**：默认 Token 缺失、过期或被上游拒绝时，通过 `IWARA_USERNAME` 与 `IWARA_PASSWORD` 获取。
+2. **有效的后端默认 Token**：环境变量 `IWARA_AUTHORIZATION`；Worker / Node.js 版也支持代码中的默认值 `DEFAULT_IWARA_AUTHORIZATION`。
+3. **后端自动登录 Token**：默认 Token 缺失、过期或被上游拒绝时，通过 `IWARA_USERNAME` 与 `IWARA_PASSWORD` 获取。
 
 > [!NOTE]
 > 当前端已经提供 `CustomizedToken` 时，将优先使用用户自己的 Token，而不是后端默认 Token。
@@ -177,6 +180,8 @@ npx wrangler secret list
 
 列表中应同时出现 `IWARA_USERNAME` 和 `IWARA_PASSWORD`。如果使用 Wrangler 的命名环境，请在查看、设置 Secret 和部署时都带上相同的 `--env 环境名`。`IWARA_USERNAME` 会作为登录 JSON 的 `email` 字段发送，优先填写 Iwara 登录邮箱。
 
+Node.js / Python 私有部署请检查对应目录的 `.env` 或启动进程的环境变量，两项凭据必须同时配置，修改后需重启服务；系统环境变量优先于 `.env`。下方诊断接口同样适用于私有部署。
+
 然后请求脱敏诊断接口。该请求本身会在需要时触发一次自动登录：
 
 ```bash
@@ -188,11 +193,11 @@ curl.exe -sS "https://你的域名/token-status?debug=1"
 
 | 字段 | 如何判断 |
 | :-- | :-- |
-| `configured.username/password` | 两项都应为 `true`，否则 Secret 没有绑定到当前部署环境 |
+| `configured.username/password` | 两项都应为 `true`，否则当前部署环境没有完整读取自动登录凭据 |
 | `autoLogin.attempted` | 为 `true` 表示已发起登录；已有有效 `IWARA_AUTHORIZATION` 时不会提前登录 |
 | `lastResponseStatus` | `200` 通常表示接口接受请求；`400/401` 多为账号或接口参数问题；`403` 可能是上游风控拦截 |
 | `lastResponseContentType` | 正常接口通常为 JSON；`403` 且为 `text/html` 通常表示返回了挑战页而不是登录 JSON |
-| `authorizationSource` | `auto_login_cache` 表示自动登录 Token 已获取并在当前 Worker 实例缓存 |
+| `authorizationSource` | `auto_login_cache` 表示自动登录 Token 已获取并在当前实例或进程缓存 |
 | `cachedTokenAvailable` | 为 `true` 表示响应内找到了可用 Token |
 | `failureReason` | 区分 `rate_limited`、`credentials_rejected`、`upstream_blocked`、`upstream_unavailable`、`network_error` 和 `invalid_response` |
 | `retryAfterSeconds` | 失败后的剩余冷却秒数；最多约 60 秒 |
@@ -207,6 +212,8 @@ npx wrangler tail --format pretty
 ```
 
 触发 `/token-status?debug=1` 后，应依次看到 `request_started`、`response_received`，成功时再看到 `login_succeeded`，失败时则是 `login_failed`。日志刻意不记录请求体、密码、Token 和响应正文。如果启用了站点 Basic Auth，请先在浏览器登录，或在调试请求中提供对应的 Basic Auth；不要把 Iwara 密码当作站点 Basic Auth 密码。
+
+私有部署可直接查看 Node.js / Python 服务的终端或进程管理器日志；Python 版以登录成功、失败原因与冷却时间记录结果。
 
 ### 📊 Worker 请求额度保护
 
@@ -227,7 +234,7 @@ Worker 可以使用 [Cloudflare GraphQL Analytics](https://developers.cloudflare
 
 ### 📢 远程通知
 
-设置 `NOTICE_API_URL` 后，Worker 会读取并缓存通知 JSON。通知正文支持经过安全过滤的常用 HTML；同一通知默认每天最多出现一次，用户也可以选择“不再提示”。
+设置 `NOTICE_API_URL` 后，后端会读取并缓存通知 JSON，Worker、Node.js 与 Python 版均支持。通知正文支持经过安全过滤的常用 HTML；同一通知默认每天最多出现一次，用户也可以选择“不再提示”。
 
 ```json
 {
@@ -373,39 +380,95 @@ npx wrangler secret put CF_ANALYTICS_API_TOKEN
 
 如之后希望关闭实时会话数，只需重新注释 `wrangler.toml` 中上述两段配置并再次部署，**无需更换 `worker.js`**。
 
-### 📦 B. Node.js 环境（第三方或私有部署）
+### 📦 B. Node.js 环境（完全私有部署）
 
-进入对应目录后安装依赖并启动服务：
+需要 **Node.js 18 或更高版本**（建议 20+），进入对应目录后安装依赖：
 
 ```bash
-npm install express node-fetch cors
-node server.js
+cd "完全私有部署/Nodejs环境"
+npm install
 ```
 
-默认服务端口为 `8000`。
-
-### 🐍 C. Python 环境
-
-安装所需依赖并启动后端：
+将 `.env.example` 复制为 `.env`，按注释填写配置后启动：
 
 ```bash
-pip install flask requests cloudscraper
+npm start
+```
+
+默认监听 `0.0.0.0:3000`，可通过 `HOST`、`PORT` 修改。服务直接请求 Iwara 上游，内置 Basic Auth、Token 自动登录续期、视频 Range 流式代理与在线人数 WebSocket。
+
+详细说明见 [Node.js 部署文档](./完全私有部署/Nodejs环境/README.md)。
+
+### 🐍 C. Python 环境（完全私有部署）
+
+需要 **Python 3.10 或更高版本**，可独立运行，无需安装 Node.js。进入对应目录并创建虚拟环境：
+
+```bash
+cd "完全私有部署/Python环境"
+python -m venv .venv
+```
+
+激活虚拟环境：Windows PowerShell 使用 `.\.venv\Scripts\Activate.ps1`；Linux / macOS 使用 `source .venv/bin/activate`。随后安装依赖：
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+将 `.env.example` 复制为 `.env`，按注释填写配置后启动：
+
+```bash
 python server.py
 ```
 
+默认监听 `0.0.0.0:3000`，可通过 `HOST`、`PORT` 修改。前端与 Node.js 版一致，支持相同的代理、认证、自动登录、通知与在线人数功能。
+
+可在本目录执行 `python -m unittest discover -s tests -v`，使用本地模拟上游验证，无需真实 Iwara 账号。
+
+详细说明见 [Python 部署文档](./完全私有部署/Python环境/README.md)。
+
 ### ⚙️ Node.js / Python 可选环境变量
 
-```bash
+以下配置可写入各自目录的 `.env`，也可通过系统环境变量设置；系统环境变量优先，修改后需重启服务：
+
+```dotenv
+HOST=0.0.0.0
+PORT=3000
 BASIC_AUTH_USER=your_user
 BASIC_AUTH_PASS=your_pass
 IWARA_AUTHORIZATION=your_iwara_token_or_bearer
+IWARA_USERNAME=
+IWARA_PASSWORD=
+NOTICE_API_URL=
+FORCE_PLAYBACK_MODE=
 ```
 
 | 环境变量 | 用途 |
 | :-- | :-- |
+| `HOST` / `PORT` | 监听地址与端口，默认 `0.0.0.0:3000` |
 | `BASIC_AUTH_USER` | Basic Auth 用户名 |
 | `BASIC_AUTH_PASS` | Basic Auth 密码 |
 | `IWARA_AUTHORIZATION` | 后端默认使用的 Iwara Token |
+| `IWARA_USERNAME` / `IWARA_PASSWORD` | 自动登录邮箱与密码，必须同时填写 |
+| `NOTICE_API_URL` | 首页通知 JSON 接口 |
+| `NOTICE_API_CACHE_TTL_SECONDS` | 通知缓存秒数，默认 `300` |
+| `FORCE_PLAYBACK_MODE` | `proxy` 经本站代理 / `direct` 直连 Iwara；留空且未配置 Analytics 时为代理模式 |
+| `NEW_SITE_URL` | 直连模式下展示的备用站点 |
+| `FLARESOLVERR_URL` | 可选 FlareSolverr 地址，留空不启用 |
+
+私有服务不受 Cloudflare Workers 请求额度限制。若仍需查询指定 Worker 的用量，可配置上方 Analytics 三项参数；统计对象是指定 Worker，而非私有服务自身。
+
+> [!NOTE]
+> Node.js / Python 版的 Token、通知缓存与在线人数均为单进程状态，重启清空；部署时运行单进程。通过 nginx / Caddy 提供公网访问时，需透传 WebSocket 升级并关闭视频流缓冲，具体配置见各自部署文档。
+
+### 🧩 私有部署可选：FlareSolverr
+
+上游返回 Cloudflare 挑战时，可先在**同机或同出口 IP** 部署 FlareSolverr，再设置 `FLARESOLVERR_URL=http://127.0.0.1:8191` 并重启站点。服务会尝试获取 cookie 与 User-Agent 后重试，必要时对无 Range 的 GET 使用浏览器返回的正文。
+
+- **Node.js**：`npm install` 会尝试安装可选依赖 `impit`；`FLARESOLVERR_USE_IMPIT=off` 可关闭 Chrome 指纹回放。
+- **Python**：执行 `python -m pip install -r requirements-optional.txt` 安装可选依赖 `curl_cffi`；通过 `FLARESOLVERR_USE_CURL_CFFI=auto|on|off` 控制指纹回放，也兼容 Node.js 的旧变量名。
+- **通用选项**：`FLARESOLVERR_HOSTS` 限定域名后缀，`FLARESOLVERR_SESSION` 指定浏览器会话，`FLARESOLVERR_MAX_TIMEOUT` 设置解盾超时（默认 `60000` 毫秒），`FLARESOLVERR_BROWSER_FETCH=off` 关闭内容直取兜底。
+
+解盾受出口 IP、UA 与指纹限制，不能保证所有挑战均可通过；失败时保留上游挑战响应。
 
 ---
 
@@ -426,7 +489,7 @@ Token 会保存在浏览器本地 `localStorage` 中；系统会自动检测是�
 > [!WARNING]
 > 配置共享 Token 后，所有访客默认都可能借助该 Token 访问需要登录的内容。除非用户自行填写前端 Token，否则建议务必配合 **Basic Auth** 使用。
 
-启用 Worker 自动登录时同样属于共享账号能力。建议使用专用 Iwara 账号、开启 Worker 的 Basic Auth，并仅通过 Cloudflare Secret 保存登录凭据。自动登录接口若遇到账号错误、Iwara 限流或 Cloudflare 风控，页面会提示站点管理员检查配置；公开内容仍会尝试以无 Token 模式访问。
+启用后端自动登录时同样属于共享账号能力。建议使用专用 Iwara 账号并开启站点 Basic Auth；Worker 通过 Cloudflare Secret 保存登录凭据，私有部署使用本地 `.env` 或系统环境变量，勿提交到仓库。账号配置错误会提示管理员处理；Iwara 限流、上游风控或暂时网络异常会进入冷却并按需重试，公开内容仍会尝试以无 Token 模式访问。
 
 ### 📋 剪切板自动识别
 

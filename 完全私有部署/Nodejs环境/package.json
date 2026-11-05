@@ -1,0 +1,19 @@
+{
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "description": "Iwara 播放站 Worker 的 Node.js 部署版（业务逻辑与 Cloudflare 版 worker.js 相同，运行时差异由 server.mjs 适配）",
+  "engines": {
+    "node": ">=18"
+  },
+  "name": "iwara-worker-node",
+  "private": true,
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "type": "module",
+  "version": "1.2.0",
+  "optionalDependencies": {
+    "impit": "^0.14.8"
+  }
+}

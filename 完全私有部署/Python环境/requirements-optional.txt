@@ -1,0 +1,3 @@
+-r requirements.txt
+# 可选：FlareSolverr clearance 回放时模拟 Chrome TLS/HTTP2 指纹。
+curl_cffi>=0.14,<0.15

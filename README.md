@@ -3,10 +3,10 @@
 <p align="center">
   <img src="./firefly.jpg" width="180" alt="Firefly 项目图标">
 </p>
-
 <p align="center">
-  <strong>简单反代 Iwara · 绕过限制，自由播放！</strong>
+  <strong>反代 Iwara · 绕过限制，自由播放！</strong>
 </p>
+
 
 <p align="center">
   一个支持 <strong>Cloudflare Worker、Node.js 与 Python 私有部署</strong> 的 Iwara 视频播放与双站整站反代解决方案。
@@ -22,9 +22,8 @@
 
 
 > [!IMPORTANT]
-> **Iwara 已新增 [AI 视频网站](https://www.iwara.ai)**。本项目已跟随更新，目前支持播放 **[www.iwara.tv](https://www.iwara.tv)** 与 **[www.iwara.ai](https://www.iwara.ai)** 两个站点的视频。
 >
-> **新增 [“Iwara双站(TV和AI)”](./反代Iwara双站/) 整个网站反代方案**：提供 **Node.js 与 Cloudflare Worker** 两种实现，覆盖两个站点的原站首页、账号登录、视频浏览 / 搜索 / 播放、图片、论坛发帖与评论等功能。使用原站界面操作，部署方法见下方 [双站整站反代](#dual-site)。
+> **新增 [“Iwara双站(TV和AI)”](./反代Iwara双站/) 整个网站反代方案**：提供 **Node.js 与 Cloudflare Worker** 两种实现，覆盖两个站点的原站首页、账号登录、视频浏览 / 搜索 / 播放、图片、论坛发帖与评论等功能。使用原站界面操作，部署方法见下方 [双站整站反代部署说明](#dual-site)。
 
 ---
 
@@ -52,7 +51,7 @@
 
 想要立即体验？可直接访问以下由 **Cloudflare Worker** 驱动的演示站点：<a href="https://ss.ixq.pp.ua"><strong>🚀 主演示站</strong></a> · <a href="https://ss.iys.pp.ua"><strong>🛰️ 备用演示站</strong></a>
 
-整站反代方案可按 [双站整站反代部署说明](#dual-site) 自行部署。下面是反代双站演示站点：<a href="https://tv.iww.de5.net"><strong>🚀 反代TV演示站</strong></a>  · <a href="https://ai.iww.de5.net"><strong>🛰️ 反代AI演示站</strong></a>
+可直接访问以下由 **Cloudflare Worker** 驱动的反代 Iwara 双站演示站点：<a href="https://tv.iww.de5.net"><strong>🚀 反代TV演示站</strong></a>  · <a href="https://ai.iww.de5.net"><strong>🛰️ 反代AI演示站</strong></a>
 
 ---
 
@@ -287,7 +286,7 @@ Worker 可以使用 [Cloudflare GraphQL Analytics](https://developers.cloudflare
 
 ## 🚀 部署指南
 
-**视频播放站**可选择下方 A / B / C；需要通过原站界面登录、搜索、发帖等功能时，请使用 [D. 双站整站反代](#dual-site)。
+**视频播放站**可选择下方 A / B / C 方案；需要通过原站界面登录、搜索、发帖等功能时，请使用 [D方案：双站整站反代](#dual-site)。
 
 ### 🌟 A. Cloudflare Worker（推荐）
 
@@ -635,3 +634,4 @@ Token 会保存在浏览器本地 `localStorage` 中；系统会自动检测是�
   <strong>Iwara Video Proxy</strong><br>
   简单、灵活、可自托管的 Iwara 视频播放与双站整站反代方案。
 </p>
+

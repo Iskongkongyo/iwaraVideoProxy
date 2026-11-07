@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  一个支持 <strong>Cloudflare Worker、Node.js 与 Python 私有部署</strong> 的 Iwara 视频代理及播放解决方案。
+  一个支持 <strong>Cloudflare Worker、Node.js 与 Python 私有部署</strong> 的 Iwara 视频播放与双站整站反代解决方案。
 </p>
 
 <p align="center">
@@ -23,6 +23,8 @@
 
 > [!IMPORTANT]
 > **Iwara 已新增 [AI 视频网站](https://www.iwara.ai)**。本项目已跟随更新，目前支持播放 **[www.iwara.tv](https://www.iwara.tv)** 与 **[www.iwara.ai](https://www.iwara.ai)** 两个站点的视频。
+>
+> **新增 [“Iwara双站(TV和AI)”](./反代Iwara双站/) 整个网站反代方案**：提供 **Node.js 与 Cloudflare Worker** 两种实现，覆盖两个站点的原站首页、账号登录、视频浏览 / 搜索 / 播放、图片、论坛发帖与评论等功能。使用原站界面操作，部署方法见下方 [双站整站反代](#dual-site)。
 
 ---
 
@@ -37,6 +39,7 @@
   <a href="#auth">🔐 认证与 Token</a> ·
   <a href="#security">🛡️ 核心安全</a> ·
   <a href="#deploy">🚀 部署指南</a> ·
+  <a href="#dual-site">🪞 双站整站反代</a> ·
   <a href="#tips">💡 使用小贴士</a> ·
   <a href="#thanks">🙏 鸣谢</a>
 </p>
@@ -48,6 +51,8 @@
 ## 🌐 演示站点
 
 想要立即体验？可直接访问以下由 **Cloudflare Worker** 驱动的演示站点：<a href="https://ss.ixq.pp.ua"><strong>🚀 主演示站</strong></a> · <a href="https://ss.iys.pp.ua"><strong>🛰️ 备用演示站</strong></a>
+
+整站反代方案可按 [双站整站反代部署说明](#dual-site) 自行部署。下面是反代双站演示站点：<a href="https://tv.iww.de5.net"><strong>🚀 反代TV演示站</strong></a>  · <a href="https://ai.iww.de5.net"><strong>🛰️ 反代AI演示站</strong></a>
 
 ---
 
@@ -66,6 +71,9 @@
 ## ✨ 功能亮点
 
 - 🌍 **双站点支持**：兼容 `www.iwara.tv` 与 `www.iwara.ai` 视频播放。
+- 🪞 **双站整站反代**：新增 `反代Iwara双站/`，保留原站界面与操作流程，支持账号登录、视频浏览 / 搜索 / 播放、图片、论坛浏览 / 发帖 / 评论等功能。
+- 🔀 **双站入口配置**：Node.js 版可用两个端口运行主站与 AI 站；Worker 版支持单 Worker + 两个代理域名，也可分别部署两个 Worker，并自动处理 `X-Site` 与共享后端域名。
+- 🚫 **整站广告拦截**：新方案默认拦截广告 / 追踪域名并隐藏广告容器，可通过 `NO_AD_BLOCK=1` 关闭；视频与图片保留流式转发及 Range / `206` 支持。
 - ⚡ **多种部署方式**：支持 Cloudflare Worker、Node.js 与 Python 私有部署。
 - 🔐 **前后端 Token 机制**：支持前端自定义 Token 与后端默认 Token，并按优先级自动选择。
 - 🛡️ **全局访问保护**：可通过 Basic Auth 为站点及相关接口增加统一认证。
@@ -77,6 +85,11 @@
 - 👥 **实时会话数**：Cloudflare Worker 可通过 Durable Objects + WebSocket 开启在线会话统计，Node.js 与 Python 版内置 WebSocket 统计；前端在用户交互或等待 8 秒后延迟连接。
 - 🧩 **可选挑战处理**：Node.js 与 Python 私有部署均支持 FlareSolverr，可在上游返回 Cloudflare 挑战时尝试解盾并重试。
 - 📋 **剪切板链接识别**：在获得浏览器权限后，可自动识别剪切板中的 Iwara 视频链接并提示。
+
+| 使用需求 | 对应方案 |
+| :-- | :-- |
+| **粘贴链接播放视频** | `Worker部署/`、`完全私有部署/`：使用本项目播放界面，提供自定义 Token、共享账号、通知与在线人数等功能 |
+| **通过原站界面使用双站功能** | `反代Iwara双站/`：代理原站页面、API、图片与视频，使用自己的 Iwara 账号登录、搜索视频、发帖和评论 |
 
 ---
 
@@ -91,6 +104,8 @@
 | `Worker部署/` | **Cloudflare Worker 统一版**：可选开启全站实时会话数，无需维护两份 Worker 代码 |
 | `完全私有部署/Nodejs环境/` | **Node.js 私有部署**：`server.mjs` 适配运行时，`worker.mjs` 包含业务逻辑与前端，附有配置示例和部署说明 |
 | `完全私有部署/Python环境/` | **Python 私有部署**：`server.py` 启动服务，`worker.py` 实现业务逻辑，`index.html` 提供完整前端，附有配置示例、部署说明与本地测试 |
+| `反代Iwara双站/Nodejs版.zip` | **双站整站反代 · Node.js**：包含 `proxy.js`、`package.json`、`test.js` 与独立 README；零 npm 依赖，默认使用系统 `curl` 回源 |
+| `反代Iwara双站/Worker版.zip` | **双站整站反代 · Worker**：解压后为 `Iwara-Worker-Dual/`，包含 `worker.js`、`wrangler.toml`、测试与独立 README；支持双域名入口映射 |
 | `浏览器脚本/` | **浏览器用户脚本**：提供 Iwara 视频反代加速脚本 |
 
 ---
@@ -106,6 +121,8 @@
 | **Node.js 版** | Node.js HTTP 服务、原生 Fetch API、`ws`，可选 `impit` 指纹回放 |
 | **Python 版** | `aiohttp` 异步 HTTP / WebSocket 服务，可选 `curl_cffi` 指纹回放 |
 | **私有部署挑战处理** | 可选 FlareSolverr，支持 clearance 缓存、重试与浏览器内容直取 |
+| **整站反代 · Node.js** | Node.js 内置 HTTP / HTTPS 模块、系统 `curl`、页面与 API URL 重写、浏览器运行时补丁，无需安装 npm 依赖 |
+| **整站反代 · Worker** | Cloudflare Workers 原生 Fetch API、流式转发、`SITE_HOST_MAP` 双域名映射与浏览器运行时补丁 |
 
 ---
 
@@ -114,6 +131,9 @@
 ## 🔐 认证与 Token 机制
 
 为了防止站点滥用，并避免与 Iwara 原生请求头产生冲突，项目提供了前后端协同的认证与 Token 处理机制。
+
+> [!NOTE]
+> 本节的 `CustomizedToken`、Basic Auth 与后端共享 Token 配置适用于 `Worker部署/`、`完全私有部署/` 的视频播放站。新增 `反代Iwara双站/` 使用**原站账号登录流程**，转发登录请求、Cookie 与原站 `Authorization`；账号由用户在代理后的原站登录页面填写。
 
 ### 🔑 自定义 Token：`CustomizedToken`
 
@@ -154,6 +174,8 @@
 <a id="security"></a>
 
 ## 🛡️ 核心功能与安全
+
+本节介绍视频播放站的状态接口、通知与 `/view` 校验。整站反代采用 `/p/<host>/...` 路由和目标域名白名单，并转发登录、发帖、评论所需的请求方法与请求体；相关配置见 [双站整站反代](#dual-site)。
 
 ### 🔍 Token 状态监控：`/token-status`
 
@@ -264,6 +286,8 @@ Worker 可以使用 [Cloudflare GraphQL Analytics](https://developers.cloudflare
 <a id="deploy"></a>
 
 ## 🚀 部署指南
+
+**视频播放站**可选择下方 A / B / C；需要通过原站界面登录、搜索、发帖等功能时，请使用 [D. 双站整站反代](#dual-site)。
 
 ### 🌟 A. Cloudflare Worker（推荐）
 
@@ -470,11 +494,98 @@ FORCE_PLAYBACK_MODE=
 
 解盾受出口 IP、UA 与指纹限制，不能保证所有挑战均可通过；失败时保留上游挑战响应。
 
+<a id="dual-site"></a>
+
+### 🪞 D. 双站整站反代（Node.js / Worker）
+
+`反代Iwara双站/` 提供两个独立压缩包。先按所选方式解压，再使用包内脚本部署；各包均附有详细 README。整站反代保留原站首页、登录、视频浏览 / 搜索 / 播放、图片与论坛交互，发帖、评论等操作按原站账号权限执行。
+
+两个实现都会重写页面、脚本、API 响应中的上游地址，将 API / 图片 / 视频等子域请求转为 `/p/<host>/...`，并处理 Cookie、重定向、`Origin` / `Referer` 与 `X-Site`，使 AI 站也能使用共享的 `.iwara.tv` 后端。
+
+#### 📦 Node.js：两个实例分别提供主站与 AI 站
+
+1. 解压 [`Nodejs版.zip`](./反代Iwara双站/Nodejs版.zip)，进入包含 `proxy.js` 与 `package.json` 的目录。
+2. 准备 **Node.js 16 或更高版本**与系统 **`curl`** 命令；脚本无 npm 依赖，配置通过进程环境变量传入。
+3. 启动主站实例：
+
+```bash
+node proxy.js
+```
+
+默认访问 `http://127.0.0.1:8888/`，对应 `www.iwara.tv`。
+
+在**另一个终端**进入同一目录，启动 AI 站实例。Windows PowerShell 示例：
+
+```powershell
+$env:PORT = "8889"
+$env:SITE_DOMAIN = "iwara.ai"
+node proxy.js
+```
+
+Linux / macOS 示例：
+
+```bash
+PORT=8889 SITE_DOMAIN=iwara.ai node proxy.js
+```
+
+访问 `http://127.0.0.1:8889/` 即为 `www.iwara.ai`。两个实例可同时运行；需要域名访问时，将两个代理域名分别反代到 `8888`、`8889` 端口。
+
+| Node.js 变量 | 默认值 | 用途 |
+| :-- | :-- | :-- |
+| `PORT` | `8888` | 当前实例监听端口 |
+| `SITE_DOMAIN` | `iwara.tv` | 当前实例站点；AI 站设为 `iwara.ai` |
+| `UPSTREAM_SITE` | `www.<SITE_DOMAIN>` | 默认回源主机 |
+| `UPSTREAM_PROXY` | 空 | 可选 HTTP CONNECT 出口代理，例如 `http://127.0.0.1:7890`；也读取 `HTTPS_PROXY` / `HTTP_PROXY` 等系统代理变量 |
+| `TRANSPORT` | `curl` | 默认通过系统 curl 回源；可设为 `node` 使用内置 HTTPS 传输 |
+
+如部署机器需要出口代理，在启动前设置 `UPSTREAM_PROXY`。公网访问可通过 nginx / Caddy 提供 HTTPS，保留 `Host`、传入 `X-Forwarded-Proto` 并关闭视频流缓冲。可在解压目录执行 `node test.js` 验证路由与重写逻辑。
+
+#### ☁️ Worker：一个 Worker 绑定两个代理域名
+
+1. 解压 [`Worker版.zip`](./反代Iwara双站/Worker版.zip)，进入 `Iwara-Worker-Dual/`。
+2. 创建 Cloudflare Worker，将包内 `worker.js` 的完整内容粘贴到在线编辑器并部署。
+3. 将两个代理域名或路由绑定到该 Worker，例如 `tv-proxy.example.com` 与 `ai-proxy.example.com`。
+4. 添加以下环境变量，并将示例域名替换为自己的代理域名：
+
+| 变量 | 示例值 |
+| :-- | :-- |
+| `SITE_HOST_MAP` | `tv-proxy.example.com=www.iwara.tv,ai-proxy.example.com=www.iwara.ai` |
+
+访问两个域名的根路径即可分别打开主站与 AI 站。Worker 根据入口 hostname 选择上游；同一个 hostname 的根路径对应一个默认站点，两个站点需要两个入口 hostname。
+
+也可在 `Iwara-Worker-Dual/` 中修改 `wrangler.toml` 的 `name`，取消示例 `[vars]` 配置的注释并填写自己的 `SITE_HOST_MAP`，随后使用 Wrangler 部署：
+
+```bash
+npx wrangler login
+npx wrangler deploy
+```
+
+若选择**分别部署两个 Worker**，主站保持默认 `SITE_DOMAIN=iwara.tv`，AI 站设置 `SITE_DOMAIN=iwara.ai`，各自绑定代理域名即可。`UPSTREAM_SITE=www.iwara.ai` 也可选择 AI 站；`SITE_HOST_MAP` 匹配成功时优先使用映射值。包内 `npm test` 可验证双站配置、请求头与 URL 重写逻辑。
+
+#### ⚙️ 整站反代通用选项与说明
+
+| 变量 | 默认值 | 用途 |
+| :-- | :-- | :-- |
+| `EXTRA_HOSTS` | 空 | 额外允许代理的域名，逗号分隔 |
+| `BLOCK_HOSTS` | 空 | 追加拦截的域名，逗号分隔 |
+| `NO_AD_BLOCK` | `0` | 设为 `1` 关闭默认广告拦截 |
+| `ALLOW_ANY_HOST` | `0` | 保持默认域名白名单；设为 `1` 会放开目标域名限制 |
+| `DEBUG` | `0` | 设为 `1` 输出调试日志 |
+
+> [!NOTE]
+> 整站反代直接使用原站登录与账号权限。上述播放站的 `IWARA_AUTHORIZATION`、`IWARA_USERNAME` / `IWARA_PASSWORD`、`CustomizedToken`、`/token-status`、在线人数及 FlareSolverr 配置属于播放站方案；整站包的可用选项以本节及包内 README 为准。需要限制整站代理访问时，可在前置反向代理或访问控制层配置。
+
+视频与图片保留 Range / `206` 流式转发。大文件上传尚未专门优化；Worker 的请求与上传能力还受平台限制。Node.js 版默认使用系统 curl，Worker 版使用平台原生 `fetch()`，访问效果取决于部署出口与上游验证，均不能保证通过所有 Cloudflare 挑战。建议保持默认目标域名白名单。
+
 ---
 
 <a id="tips"></a>
 
 ## 💡 使用小贴士
+
+### 🪞 整站反代登录与双站访问
+
+通过自己的主站代理域名或 AI 站代理域名进入后，可在原站页面登录账号，再使用视频搜索、播放、论坛发帖与评论等功能。两个入口分别对应各自站点，登录状态按代理域名保存；同时使用两站时，请分别确认各入口的登录状态。Node.js 版的配置通过启动进程的环境变量设置，Worker 版使用 Worker 环境变量。
 
 ### 🔑 前端 Token
 
@@ -522,5 +633,5 @@ Token 会保存在浏览器本地 `localStorage` 中；系统会自动检测是�
 
 <p align="center">
   <strong>Iwara Video Proxy</strong><br>
-  简单、灵活、可自托管的 Iwara 视频代理与播放方案。
+  简单、灵活、可自托管的 Iwara 视频播放与双站整站反代方案。
 </p>
